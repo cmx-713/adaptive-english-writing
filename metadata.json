@@ -1,0 +1,5 @@
+{
+  "name": "Adaptive English Writing Coach",
+  "description": "A specialized writing assistant for CET-4/6 students. Features a 'Forced Association' (Blind Box) mode to train critical thinking by analyzing topics from 3 random, challenging perspectives.",
+  "requestFramePermissions": []
+}
