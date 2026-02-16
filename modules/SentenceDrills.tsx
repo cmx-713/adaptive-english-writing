@@ -59,7 +59,7 @@ const SentenceDrills: React.FC<SentenceDrillsProps> = ({ supabaseUserId }) => {
     // Update: Map AggregatedError objects to simple strings for the drill generator context
     const adaptiveContext = {
       pastErrors: getAggregatedUserErrors(8).map(e => e.original),
-      targetVocab: getAggregatedUserVocab(8), // Get last 8 random vocab
+      targetVocab: getAggregatedUserVocab(8).map(v => v.word), // Extract word strings
     };
 
     // Determine if we are using adaptive data or generic
