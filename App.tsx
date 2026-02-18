@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import SocraticCoach from './modules/SocraticCoach';
 import EssayGrader from './modules/EssayGrader';
 import SentenceDrills from './modules/SentenceDrills';
@@ -16,8 +17,17 @@ const DEFAULT_CONFIG: ApiConfig = {
   modelName: 'gemini-3-flash-preview'
 };
 
+const TAB_PATHS: Record<string, Tab> = {
+  '/coach': 'coach',
+  '/grader': 'grader',
+  '/drills': 'drills',
+  '/profile': 'profile',
+};
+
 const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<Tab>('coach');
+  const location = useLocation();
+  const navigate = useNavigate();
+  const activeTab: Tab = TAB_PATHS[location.pathname] || 'coach';
   const [user, setUser] = useState<User | null>(null);
   const [isLoadingUser, setIsLoadingUser] = useState(true);
 
@@ -30,7 +40,7 @@ const App: React.FC = () => {
 
   const handleSendToGrader = (topic: string, essay: string) => {
     setPrefillGraderData({ topic, essay });
-    setActiveTab('grader');
+    navigate('/grader');
   };
 
   useEffect(() => {
@@ -113,6 +123,14 @@ const App: React.FC = () => {
     return <TeacherDashboard user={user} onLogout={handleLogout} />;
   }
 
+  // 确保首次访问根路径时重定向到 /coach
+  if (location.pathname === '/' || !TAB_PATHS[location.pathname]) {
+    // 使用 replaceState 避免浏览器历史堆积
+    if (location.pathname !== '/coach') {
+      navigate('/coach', { replace: true });
+    }
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 font-sans selection:bg-brand-100 selection:text-brand-900">
       {/* Global Header */}
@@ -132,7 +150,7 @@ const App: React.FC = () => {
           {/* Navigation Tabs (Desktop) */}
           <nav className="hidden md:flex items-center bg-slate-100 p-1.5 rounded-xl gap-1">
             <button
-              onClick={() => setActiveTab('coach')}
+              onClick={() => navigate('/coach')}
               className={`px-6 py-2.5 rounded-lg text-lg font-bold transition-all ${activeTab === 'coach'
                 ? 'bg-white text-blue-900 shadow-sm ring-1 ring-black/5'
                 : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
@@ -141,7 +159,7 @@ const App: React.FC = () => {
               🧠 思维训练
             </button>
             <button
-              onClick={() => setActiveTab('grader')}
+              onClick={() => navigate('/grader')}
               className={`px-6 py-2.5 rounded-lg text-lg font-bold transition-all ${activeTab === 'grader'
                 ? 'bg-white text-blue-900 shadow-sm ring-1 ring-black/5'
                 : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
@@ -150,7 +168,7 @@ const App: React.FC = () => {
               ✍️ 作文批改
             </button>
             <button
-              onClick={() => setActiveTab('drills')}
+              onClick={() => navigate('/drills')}
               className={`px-6 py-2.5 rounded-lg text-lg font-bold transition-all ${activeTab === 'drills'
                 ? 'bg-white text-blue-900 shadow-sm ring-1 ring-black/5'
                 : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
@@ -159,7 +177,7 @@ const App: React.FC = () => {
               🏋️ 句子特训
             </button>
             <button
-              onClick={() => setActiveTab('profile')}
+              onClick={() => navigate('/profile')}
               className={`px-6 py-2.5 rounded-lg text-lg font-bold transition-all ${activeTab === 'profile'
                 ? 'bg-white text-blue-900 shadow-sm ring-1 ring-black/5'
                 : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
@@ -199,28 +217,28 @@ const App: React.FC = () => {
         <div className="md:hidden border-t border-slate-100 p-3 overflow-x-auto bg-slate-50/50 backdrop-blur-sm">
           <div className="flex justify-center gap-3 min-w-max">
             <button
-              onClick={() => setActiveTab('coach')}
+              onClick={() => navigate('/coach')}
               className={`px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm ${activeTab === 'coach' ? 'bg-blue-50 text-blue-900 border border-blue-200' : 'text-slate-500 bg-white border border-slate-100'
                 }`}
             >
               🧠 思维训练
             </button>
             <button
-              onClick={() => setActiveTab('grader')}
+              onClick={() => navigate('/grader')}
               className={`px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm ${activeTab === 'grader' ? 'bg-blue-50 text-blue-900 border border-blue-200' : 'text-slate-500 bg-white border border-slate-100'
                 }`}
             >
               ✍️ 作文批改
             </button>
             <button
-              onClick={() => setActiveTab('drills')}
+              onClick={() => navigate('/drills')}
               className={`px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm ${activeTab === 'drills' ? 'bg-blue-50 text-blue-900 border border-blue-200' : 'text-slate-500 bg-white border border-slate-100'
                 }`}
             >
               🏋️ 句子特训
             </button>
             <button
-              onClick={() => setActiveTab('profile')}
+              onClick={() => navigate('/profile')}
               className={`px-4 py-2.5 rounded-lg text-sm font-bold transition-all shadow-sm ${activeTab === 'profile' ? 'bg-blue-50 text-blue-900 border border-blue-200' : 'text-slate-500 bg-white border border-slate-100'
                 }`}
             >
@@ -252,7 +270,7 @@ const App: React.FC = () => {
         <div className={activeTab === 'profile' ? 'block' : 'hidden'}>
           <ProfileCenter
             isActive={activeTab === 'profile'}
-            onNavigate={setActiveTab}
+            onNavigate={(path: string) => navigate(path)}
           />
         </div>
 
