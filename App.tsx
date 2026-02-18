@@ -118,8 +118,11 @@ const App: React.FC = () => {
     return <LoginScreen onLogin={handleLogin} />;
   }
 
-  // If teacher, show teacher dashboard
+  // If teacher, show teacher dashboard and sync URL
   if (user.role === 'teacher') {
+    if (location.pathname !== '/teacher') {
+      navigate('/teacher', { replace: true });
+    }
     return <TeacherDashboard user={user} onLogout={handleLogout} />;
   }
 
