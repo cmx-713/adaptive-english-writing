@@ -6,28 +6,34 @@
 import { createClient } from '@supabase/supabase-js'
 
 // 从环境变量读取配置
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || ''
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
 
-// 验证环境变量
+// 验证环境变量（仅警告，不崩溃）
 if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error(
-    '❌ Missing Supabase environment variables!\n' +
-    'Please create .env.local file with:\n' +
+  console.warn(
+    '⚠️ Missing Supabase environment variables!\n' +
+    'Supabase features (cloud sync, teacher dashboard) will be unavailable.\n' +
+    'To enable, create .env.local file with:\n' +
     '  VITE_SUPABASE_URL=your-project-url\n' +
     '  VITE_SUPABASE_ANON_KEY=your-anon-key'
   )
 }
 
 // 创建 Supabase 客户端（学生端使用）
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-    storage: window.localStorage,
-  },
-})
+// 当环境变量缺失时，使用占位符初始化（API 调用会失败但不会阻止应用启动）
+export const supabase = createClient(
+  supabaseUrl || 'https://placeholder.supabase.co',
+  supabaseAnonKey || 'placeholder-key',
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      storage: window.localStorage,
+    },
+  }
+)
 
 // 教师端客户端（使用 service_role key，未来实现）
 // export const supabaseAdmin = createClient(
