@@ -108,6 +108,25 @@ const App: React.FC = () => {
     localStorage.setItem('cet_api_config', JSON.stringify(newConfig));
   };
 
+  // 路由重定向（必须在 useEffect 中，不能在渲染阶段调用 navigate）
+  // 注意：此 useEffect 必须在所有 early return 之前，遵守 React Hooks 规则
+  useEffect(() => {
+    if (!user || isLoadingUser) return;
+
+    // 教师角色重定向到教师端
+    if (user.role === 'teacher' && location.pathname !== '/teacher') {
+      navigate('/teacher', { replace: true });
+      return;
+    }
+
+    // 学生角色：确保访问根路径或未知路径时重定向到 /coach
+    if (user.role !== 'teacher') {
+      if (location.pathname === '/' || (!TAB_PATHS[location.pathname] && location.pathname !== '/teacher')) {
+        navigate('/coach', { replace: true });
+      }
+    }
+  }, [user, isLoadingUser, location.pathname, navigate]);
+
   // While checking local storage, show nothing (or a spinner if desired) to prevent flash
   if (isLoadingUser) {
     return null;
@@ -118,20 +137,9 @@ const App: React.FC = () => {
     return <LoginScreen onLogin={handleLogin} />;
   }
 
-  // If teacher, show teacher dashboard and sync URL
+  // If teacher, show teacher dashboard
   if (user.role === 'teacher') {
-    if (location.pathname !== '/teacher') {
-      navigate('/teacher', { replace: true });
-    }
     return <TeacherDashboard user={user} onLogout={handleLogout} />;
-  }
-
-  // 确保首次访问根路径时重定向到 /coach
-  if (location.pathname === '/' || !TAB_PATHS[location.pathname]) {
-    // 使用 replaceState 避免浏览器历史堆积
-    if (location.pathname !== '/coach') {
-      navigate('/coach', { replace: true });
-    }
   }
 
   return (
