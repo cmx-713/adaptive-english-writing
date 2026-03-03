@@ -374,108 +374,136 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
 
   // Computed Logic
   const errorStats = useMemo(() => {
-    const categories: CritiqueCategory[] = ['Content', 'Organization', 'Proficiency', 'Clarity'];
-    const counts = categories.map(cat => ({
-      category: cat,
-      count: recentErrors.filter(e => e.category === cat).length,
-      config: {
+    try {
+      const defaultConfig = { color: 'text-slate-600', bg: 'bg-slate-50', border: 'border-slate-100', ring: 'ring-slate-200', icon: '📝', label: '其他' };
+      const configMap: Record<string, typeof defaultConfig> = {
         'Clarity': { color: 'text-rose-600', bg: 'bg-rose-50', border: 'border-rose-100', ring: 'ring-rose-200', icon: '📖', label: '表达清晰度' },
         'Proficiency': { color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-100', ring: 'ring-blue-200', icon: '🗣️', label: '语言纯熟度' },
         'Organization': { color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-100', ring: 'ring-amber-200', icon: '🧩', label: '组织与逻辑' },
         'Content': { color: 'text-purple-600', bg: 'bg-purple-50', border: 'border-purple-100', ring: 'ring-purple-200', icon: '📝', label: '内容与思辨' }
-      }[cat]
-    }));
-    const sorted = [...counts].sort((a, b) => b.count - a.count);
-    return {
-      all: counts,
-      topWeaknesses: sorted.filter(c => c.count > 0).slice(0, 2),
-      total: recentErrors.length
-    };
+      };
+      const categories: CritiqueCategory[] = ['Content', 'Organization', 'Proficiency', 'Clarity'];
+      const counts = categories.map(cat => ({
+        category: cat,
+        count: recentErrors.filter(e => e.category === cat).length,
+        config: configMap[cat] || defaultConfig
+      }));
+      const sorted = [...counts].sort((a, b) => b.count - a.count);
+      return {
+        all: counts,
+        topWeaknesses: sorted.filter(c => c.count > 0).slice(0, 2),
+        total: recentErrors.length
+      };
+    } catch (err) {
+      console.error('[ProfileCenter] errorStats computation failed:', err);
+      return { all: [], topWeaknesses: [], total: 0 };
+    }
   }, [recentErrors]);
 
   const essayHistory = useMemo(() => {
-    return historyItems
-      .filter(item => {
-        if (item.dataType !== 'essay_grade') return false;
-        // 防御性检查：过滤掉数据不完整的记录，避免下游计算崩溃
-        const data = item.data as EssayHistoryData;
-        return data?.result && typeof data.result.totalScore === 'number' && data.result.subScores;
-      })
-      .sort((a, b) => a.timestamp - b.timestamp);
+    try {
+      return historyItems
+        .filter(item => {
+          if (item.dataType !== 'essay_grade') return false;
+          const data = item.data as EssayHistoryData;
+          return data?.result && typeof data.result.totalScore === 'number' && data.result.subScores;
+        })
+        .sort((a, b) => a.timestamp - b.timestamp);
+    } catch (err) {
+      console.error('[ProfileCenter] essayHistory computation failed:', err);
+      return [];
+    }
   }, [historyItems]);
 
   // 获取最近的5次作文用于趋势图
   const recentEssays = essayHistory.slice(-5);
-  const latestEssayData = essayHistory.length > 0 ? (essayHistory[essayHistory.length - 1].data as EssayHistoryData).result : null;
+  const latestEssayData = essayHistory.length > 0
+    ? (essayHistory[essayHistory.length - 1].data as EssayHistoryData)?.result ?? null
+    : null;
 
   const historicalAverage = useMemo(() => {
-    if (essayHistory.length === 0) return null;
-    const sums = essayHistory.reduce((acc, item) => {
-      const scores = (item.data as EssayHistoryData).result.subScores;
-      const s = scores as any;
-      acc.content += s.content || 0;
-      acc.organization += s.organization || 0;
-      acc.proficiency += s.proficiency || 0;
-      acc.clarity += s.clarity || 0;
-      return acc;
-    }, { content: 0, organization: 0, proficiency: 0, clarity: 0 });
-    const count = essayHistory.length;
-    return {
-      content: sums.content / count,
-      organization: sums.organization / count,
-      proficiency: sums.proficiency / count,
-      clarity: sums.clarity / count,
-    };
+    try {
+      if (essayHistory.length === 0) return null;
+      const sums = essayHistory.reduce((acc, item) => {
+        const scores = (item.data as EssayHistoryData)?.result?.subScores;
+        if (!scores) return acc;
+        acc.content += (scores as any).content ?? 0;
+        acc.organization += (scores as any).organization ?? 0;
+        acc.proficiency += (scores as any).proficiency ?? 0;
+        acc.clarity += (scores as any).clarity ?? 0;
+        return acc;
+      }, { content: 0, organization: 0, proficiency: 0, clarity: 0 });
+      const count = essayHistory.length;
+      return {
+        content: sums.content / count,
+        organization: sums.organization / count,
+        proficiency: sums.proficiency / count,
+        clarity: sums.clarity / count,
+      };
+    } catch (err) {
+      console.error('[ProfileCenter] historicalAverage computation failed:', err);
+      return null;
+    }
   }, [essayHistory]);
 
   const improvementFeedback = useMemo(() => {
-    if (!latestEssayData || !historicalAverage) return null;
-    const current = latestEssayData.subScores;
-    const average = historicalAverage;
-    const dims = [
-      { key: 'content', label: '内容 (Content)', max: 4 },
-      { key: 'organization', label: '组织 (Organization)', max: 3 },
-      { key: 'proficiency', label: '语言 (Proficiency)', max: 5 },
-      { key: 'clarity', label: '清晰度 (Clarity)', max: 3 }
-    ];
-    let bestDim = null;
-    let maxDiffPercent = 0;
-    dims.forEach(dim => {
-      const curr = current[dim.key as keyof typeof current];
-      const avg = average[dim.key as keyof typeof average];
-      if (avg > 0 && curr > avg) {
-        const diff = ((curr - avg) / avg) * 100;
-        if (diff > maxDiffPercent) {
-          maxDiffPercent = diff;
-          bestDim = dim.label;
+    try {
+      if (!latestEssayData?.subScores || !historicalAverage) return null;
+      const current = latestEssayData.subScores;
+      const average = historicalAverage;
+      const dims = [
+        { key: 'content', label: '内容 (Content)', max: 4 },
+        { key: 'organization', label: '组织 (Organization)', max: 3 },
+        { key: 'proficiency', label: '语言 (Proficiency)', max: 5 },
+        { key: 'clarity', label: '清晰度 (Clarity)', max: 3 }
+      ];
+      let bestDim = null;
+      let maxDiffPercent = 0;
+      dims.forEach(dim => {
+        const curr = (current as any)[dim.key] ?? 0;
+        const avg = (average as any)[dim.key] ?? 0;
+        if (avg > 0 && curr > avg) {
+          const diff = ((curr - avg) / avg) * 100;
+          if (diff > maxDiffPercent) {
+            maxDiffPercent = diff;
+            bestDim = dim.label;
+          }
         }
-      }
-    });
-    if (bestDim && maxDiffPercent > 0) return { dim: bestDim, percent: Math.round(maxDiffPercent) };
-    return null;
+      });
+      if (bestDim && maxDiffPercent > 0) return { dim: bestDim, percent: Math.round(maxDiffPercent) };
+      return null;
+    } catch (err) {
+      console.error('[ProfileCenter] improvementFeedback computation failed:', err);
+      return null;
+    }
   }, [latestEssayData, historicalAverage]);
 
   const recommendation = useMemo(() => {
-    if (!latestEssayData) return null;
-    const scores = latestEssayData.subScores;
-    const normalized = [
-      { key: 'content', val: scores.content / 4, label: '内容思辨', drill: 'Socratic Coach' },
-      { key: 'organization', val: scores.organization / 3, label: '组织逻辑', drill: 'Structure Architect' },
-      { key: 'proficiency', val: scores.proficiency / 5, label: '语言纯熟', drill: 'Elevation Lab' },
-      { key: 'clarity', val: scores.clarity / 3, label: '表达清晰', drill: 'Grammar Doctor' }
-    ];
-    const weakest = normalized.sort((a, b) => a.val - b.val)[0];
-    const adviceMap: Record<string, string> = {
-      'content': "建议回到【思维训练】环节，加强多维度审题练习。",
-      'organization': "建议使用【句式工坊】特训，加强逻辑连接词运用。",
-      'proficiency': "建议使用【表达升格】特训，积累高级同义替换。",
-      'clarity': "建议使用【语法门诊】特训，修复基础句法漏洞。"
-    };
-    return {
-      weakestSkill: weakest.label,
-      text: adviceMap[weakest.key],
-      drillMode: weakest.drill
-    };
+    try {
+      if (!latestEssayData?.subScores) return null;
+      const scores = latestEssayData.subScores;
+      const normalized = [
+        { key: 'content', val: ((scores as any).content ?? 0) / 4, label: '内容思辨', drill: 'Socratic Coach' },
+        { key: 'organization', val: ((scores as any).organization ?? 0) / 3, label: '组织逻辑', drill: 'Structure Architect' },
+        { key: 'proficiency', val: ((scores as any).proficiency ?? 0) / 5, label: '语言纯熟', drill: 'Elevation Lab' },
+        { key: 'clarity', val: ((scores as any).clarity ?? 0) / 3, label: '表达清晰', drill: 'Grammar Doctor' }
+      ];
+      const weakest = normalized.sort((a, b) => a.val - b.val)[0];
+      const adviceMap: Record<string, string> = {
+        'content': "建议回到【思维训练】环节，加强多维度审题练习。",
+        'organization': "建议使用【句式工坊】特训，加强逻辑连接词运用。",
+        'proficiency': "建议使用【表达升格】特训，积累高级同义替换。",
+        'clarity': "建议使用【语法门诊】特训，修复基础句法漏洞。"
+      };
+      return {
+        weakestSkill: weakest.label,
+        text: adviceMap[weakest.key],
+        drillMode: weakest.drill
+      };
+    } catch (err) {
+      console.error('[ProfileCenter] recommendation computation failed:', err);
+      return null;
+    }
   }, [latestEssayData]);
 
   // 🆕 训练配置映射
@@ -581,11 +609,21 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
 
   // Effects & Data Loading
   const refreshData = useCallback(() => {
-    setStats(getAllLearningStats());
-    setHistoryItems(getHistory());
-    setRecentVocab(getAggregatedUserVocab(15));
-    setRecentCollocations(getAggregatedUserCollocations(20));
-    setRecentErrors(getAggregatedUserErrors(20));
+    try {
+      setStats(getAllLearningStats());
+      setHistoryItems(getHistory());
+      setRecentVocab(getAggregatedUserVocab(15));
+      setRecentCollocations(getAggregatedUserCollocations(20));
+      setRecentErrors(getAggregatedUserErrors(20));
+    } catch (err) {
+      console.error('[ProfileCenter] Failed to load data:', err);
+      // 数据加载失败时使用默认空值，不阻止渲染
+      setStats({ socraticCount: 0, graderCount: 0, drillCount: 0 });
+      setHistoryItems([]);
+      setRecentVocab([]);
+      setRecentCollocations([]);
+      setRecentErrors([]);
+    }
     setLoading(false);
   }, []);
 
@@ -778,8 +816,8 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                 <button
                   onClick={() => setActiveVaultTab('vocabulary')}
                   className={`flex-1 px-3 py-2 rounded-lg text-sm font-bold transition-all ${activeVaultTab === 'vocabulary'
-                      ? 'bg-blue-900 text-white shadow-md'
-                      : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                    ? 'bg-blue-900 text-white shadow-md'
+                    : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
                     }`}
                 >
                   核心词汇 ({recentVocab.length})
@@ -787,8 +825,8 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                 <button
                   onClick={() => setActiveVaultTab('collocations')}
                   className={`flex-1 px-3 py-2 rounded-lg text-sm font-bold transition-all ${activeVaultTab === 'collocations'
-                      ? 'bg-blue-900 text-white shadow-md'
-                      : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                    ? 'bg-blue-900 text-white shadow-md'
+                    : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
                     }`}
                 >
                   地道搭配 ({recentCollocations.length})
@@ -859,7 +897,8 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                       {recentErrors.filter(e => activeErrorFilter === 'ALL' || e.category === activeErrorFilter).map((err, i) => {
                         const errId = i + (err.category.length * 100);
                         const isRevealed = revealedExplanationIds.has(errId);
-                        const conf = errorStats.all.find(s => s.category === err.category)?.config!;
+                        const defaultConf = { color: 'text-slate-600', bg: 'bg-slate-50', border: 'border-slate-100', ring: 'ring-slate-200', icon: '📝', label: '其他' };
+                        const conf = errorStats.all.find(s => s.category === err.category)?.config ?? defaultConf;
                         return (
                           <div key={i} className={`rounded-xl border bg-white overflow-hidden shadow-sm transition-all ${isRevealed ? `border-${conf.border.split('-')[1]}` : 'border-slate-100 hover:border-slate-300'}`}>
                             <div className="flex items-center justify-between px-3 py-2 bg-slate-50/50 border-b border-slate-50">
@@ -958,12 +997,12 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 animate-fade-in-up">
             {(() => {
               const config = getTrainingConfig(pendingTrainingCategory);
-              const colorClasses = {
+              const colorClasses = ({
                 purple: 'bg-purple-100 text-purple-600',
                 amber: 'bg-amber-100 text-amber-600',
                 blue: 'bg-blue-100 text-blue-600',
                 rose: 'bg-rose-100 text-rose-600'
-              }[config.color];
+              } as Record<string, string>)[config.color] || 'bg-slate-100 text-slate-600';
 
               return (
                 <>
