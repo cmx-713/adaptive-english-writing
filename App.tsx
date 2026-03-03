@@ -8,6 +8,7 @@ import ProfileCenter from './modules/ProfileCenter';
 import TeacherDashboard from './modules/TeacherDashboard';
 import LoginScreen from './components/LoginScreen';
 import SettingsModal from './components/SettingsModal';
+import ErrorBoundary from './components/ErrorBoundary';
 import { User, ApiConfig, Tab } from './types';
 import { quickSignInSupabase } from './services/supabaseDataService';
 
@@ -264,25 +265,33 @@ const App: React.FC = () => {
 
         {/* Module 1: Socratic Coach */}
         <div className={activeTab === 'coach' ? 'block' : 'hidden'}>
-          <SocraticCoach onSendToGrader={handleSendToGrader} supabaseUserId={user?.id} />
+          <ErrorBoundary fallbackMessage="思维训练模块加载出错">
+            <SocraticCoach onSendToGrader={handleSendToGrader} supabaseUserId={user?.id} />
+          </ErrorBoundary>
         </div>
 
         {/* Module 2: Essay Grader */}
         <div className={activeTab === 'grader' ? 'block' : 'hidden'}>
-          <EssayGrader prefillData={prefillGraderData} onPrefillConsumed={() => setPrefillGraderData(null)} supabaseUserId={user?.id} />
+          <ErrorBoundary fallbackMessage="作文批改模块加载出错">
+            <EssayGrader prefillData={prefillGraderData} onPrefillConsumed={() => setPrefillGraderData(null)} supabaseUserId={user?.id} />
+          </ErrorBoundary>
         </div>
 
         {/* Module 3: Sentence Drills */}
         <div className={activeTab === 'drills' ? 'block' : 'hidden'}>
-          <SentenceDrills supabaseUserId={user?.id} />
+          <ErrorBoundary fallbackMessage="句子特训模块加载出错">
+            <SentenceDrills supabaseUserId={user?.id} />
+          </ErrorBoundary>
         </div>
 
         {/* Module 4: Learning Center */}
         <div className={activeTab === 'profile' ? 'block' : 'hidden'}>
-          <ProfileCenter
-            isActive={activeTab === 'profile'}
-            onNavigate={(path: string) => navigate(path)}
-          />
+          <ErrorBoundary fallbackMessage="学习中心加载出错">
+            <ProfileCenter
+              isActive={activeTab === 'profile'}
+              onNavigate={(path: string) => navigate(path)}
+            />
+          </ErrorBoundary>
         </div>
 
       </main>
