@@ -6,7 +6,7 @@ import ResultsDisplay from '../components/ResultsDisplay';
 import HistoryModal from '../components/HistoryModal';
 import { fetchInspirationCards, fetchLanguageScaffolds, generateEssayIntroConclusion } from '../services/geminiService';
 import { getHistory, deleteFromHistory, saveToHistory, checkIsSaved } from '../services/storageService';
-import { saveScaffoldToSupabase, saveInspirationToSupabase, updateScaffoldDraft, saveAssembledEssayToSupabase } from '../services/supabaseDataService';
+import { saveScaffoldToSupabase, saveInspirationToSupabase, updateScaffoldDraft, saveAssembledEssayToSupabase, logAgentUsage } from '../services/supabaseDataService';
 import { UserInput, InspirationCard, ScaffoldContent, FlowState, HistoryItem, InspirationHistoryData, DimensionDraft } from '../types';
 
 interface SocraticCoachProps {
@@ -48,6 +48,9 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
 
+  // 会话计时
+  const sessionStartRef = useRef<number>(Date.now());
+
   // Load history on mount
   const refreshHistory = () => {
     const scaffolds = getHistory('scaffold');
@@ -64,6 +67,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     setFlowState('loading_cards');
     setCurrentTopic(input.topic);
     setError(null);
+    sessionStartRef.current = Date.now(); // 重置会话计时
     setActiveCard(null);
     setStep1Inputs({});
     setDimensionDrafts({}); // 新topic清空草稿
@@ -155,6 +159,9 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       // Supabase: 更新该维度的草稿
       if (supabaseUserId) {
         updateScaffoldDraft(supabaseUserId, currentTopic, activeCard.dimension, currentDraftRef.current).catch(() => { });
+        // 记录使用日志（含时长）
+        const duration = Math.round((Date.now() - sessionStartRef.current) / 1000);
+        logAgentUsage(supabaseUserId, '思维训练', 'writing_system', duration).catch(() => { });
       }
     }
 
@@ -219,6 +226,9 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     // Supabase: 保存组合成文
     if (supabaseUserId && fullEssay.trim()) {
       saveAssembledEssayToSupabase(supabaseUserId, currentTopic, fullEssay).catch(() => { });
+      // 记录使用日志（含时长）
+      const duration = Math.round((Date.now() - sessionStartRef.current) / 1000);
+      logAgentUsage(supabaseUserId, '思维训练', 'writing_system', duration).catch(() => { });
     }
 
     onSendToGrader(currentTopic, fullEssay);

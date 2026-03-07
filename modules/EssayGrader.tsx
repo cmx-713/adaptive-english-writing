@@ -1,8 +1,8 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { gradeEssay } from '../services/geminiService';
 import { saveToHistory, getHistory, deleteFromHistory, checkIsSaved } from '../services/storageService';
-import { saveEssayGradeToSupabase } from '../services/supabaseDataService';
+import { saveEssayGradeToSupabase, logAgentUsage } from '../services/supabaseDataService';
 import { EssayGradeResult, HistoryItem, EssayHistoryData } from '../types';
 import HistoryModal from '../components/HistoryModal';
 import GradingReport from '../components/GradingReport';
@@ -38,8 +38,8 @@ const ExamTimer: React.FC<{ isActive: boolean; onToggle: () => void }> = ({ isAc
       <button
         onClick={onToggle}
         className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors border ${isActive
-            ? 'bg-rose-50 text-rose-600 border-rose-200 hover:bg-rose-100'
-            : 'bg-white text-slate-500 border-slate-200 hover:text-slate-700'
+          ? 'bg-rose-50 text-rose-600 border-rose-200 hover:bg-rose-100'
+          : 'bg-white text-slate-500 border-slate-200 hover:text-slate-700'
           }`}
       >
         {isActive ? '⏹ Stop Timer' : '⏱️ Exam Mode (30m)'}
@@ -68,6 +68,9 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
   const [isSaved, setIsSaved] = useState(false);
+
+  // 会话计时
+  const sessionStartRef = useRef<number>(Date.now());
 
   // 接收从思维训练传来的预填数据
   useEffect(() => {
@@ -107,6 +110,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
     setIsGrading(true);
     setError(null);
     setIsTimerActive(false); // Stop timer on submit
+    const gradeStartTime = Date.now(); // 记录批改开始时间
 
     try {
       const gradingResult = await gradeEssay(topic, essayText);
@@ -122,6 +126,10 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
       // Supabase 双写（异步，不阻断前端）
       if (supabaseUserId) {
         saveEssayGradeToSupabase(supabaseUserId, effectiveTopic, essayText, gradingResult).catch(() => { });
+        // 记录使用日志（含时长）
+        const duration = Math.round((Date.now() - sessionStartRef.current) / 1000);
+        logAgentUsage(supabaseUserId, '作文批改', 'writing_system', duration).catch(() => { });
+        sessionStartRef.current = Date.now(); // 重置计时器
       }
 
     } catch (e: any) {

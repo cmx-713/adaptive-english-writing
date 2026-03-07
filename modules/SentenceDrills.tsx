@@ -1,9 +1,9 @@
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { DrillMode, DrillItem, DrillHistoryData } from '../types';
 import { fetchDrillItems } from '../services/geminiService';
 import { getAggregatedUserErrors, getAggregatedUserVocab, saveToHistory } from '../services/storageService';
-import { saveDrillResultToSupabase } from '../services/supabaseDataService';
+import { saveDrillResultToSupabase, logAgentUsage } from '../services/supabaseDataService';
 import DrillCard from '../components/DrillCard';
 
 const MODES: { id: DrillMode; label: string; icon: string; desc: string; color: string }[] = [
@@ -45,9 +45,13 @@ const SentenceDrills: React.FC<SentenceDrillsProps> = ({ supabaseUserId }) => {
   const [sessionComplete, setSessionComplete] = useState(false);
   const [adaptiveSource, setAdaptiveSource] = useState<string | null>(null);
 
+  // 会话计时
+  const sessionStartRef = useRef<number>(Date.now());
+
   const startSession = async (mode: DrillMode) => {
     setActiveMode(mode);
     setIsLoading(true);
+    sessionStartRef.current = Date.now(); // 重置会话计时
     setItems([]);
     setScore(0);
     setCurrentIndex(0);
@@ -104,6 +108,9 @@ const SentenceDrills: React.FC<SentenceDrillsProps> = ({ supabaseUserId }) => {
         // Supabase 双写（异步，不阻断前端）
         if (supabaseUserId) {
           saveDrillResultToSupabase(supabaseUserId, activeMode, score, items.length, items).catch(() => { });
+          // 记录使用日志（含时长）
+          const duration = Math.round((Date.now() - sessionStartRef.current) / 1000);
+          logAgentUsage(supabaseUserId, '句子特训', 'writing_system', duration).catch(() => { });
         }
       }
       setSessionComplete(true);
