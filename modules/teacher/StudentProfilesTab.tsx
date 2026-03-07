@@ -1,15 +1,17 @@
 import React, { useState, useMemo } from 'react';
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from 'recharts';
+import ThinkingProcessView from '../../components/ThinkingProcessView';
 
 interface StudentProfilesTabProps {
     students: any[];
     essays: any[];
     drills: any[];
     scaffolds: any[];
+    thinkingProcesses: any[];
     isLoading: boolean;
 }
 
-const StudentProfilesTab: React.FC<StudentProfilesTabProps> = ({ students, essays, drills, scaffolds, isLoading }) => {
+const StudentProfilesTab: React.FC<StudentProfilesTabProps> = ({ students, essays, drills, scaffolds, thinkingProcesses, isLoading }) => {
     const [expandedId, setExpandedId] = useState<string | null>(null);
     const [sortKey, setSortKey] = useState<'name' | 'essays' | 'avg' | 'recent'>('recent');
 
@@ -18,6 +20,7 @@ const StudentProfilesTab: React.FC<StudentProfilesTabProps> = ({ students, essay
             const sEssays = essays.filter((e: any) => e.user_id === s.id);
             const sDrills = drills.filter((d: any) => d.user_id === s.id);
             const sScaffolds = scaffolds.filter((sc: any) => sc.user_id === s.id);
+            const sThinkingProcesses = thinkingProcesses.filter((tp: any) => tp.user_id === s.id);
             const avgScore = sEssays.length > 0
                 ? +(sEssays.reduce((sum: number, e: any) => sum + (e.total_score || 0), 0) / sEssays.length).toFixed(1)
                 : 0;
@@ -58,9 +61,11 @@ const StudentProfilesTab: React.FC<StudentProfilesTabProps> = ({ students, essay
                 radarData,
                 topErrors,
                 scores: sEssays.map((e: any) => e.total_score || 0).reverse(),
+                thinkingProcesses: sThinkingProcesses,
+                thinkingProcessCount: sThinkingProcesses.length,
             };
         });
-    }, [students, essays, drills, scaffolds]);
+    }, [students, essays, drills, scaffolds, thinkingProcesses]);
 
     const sortedProfiles = useMemo(() => {
         const sorted = [...studentProfiles];
@@ -196,6 +201,19 @@ const StudentProfilesTab: React.FC<StudentProfilesTabProps> = ({ students, essay
                                                         </div>
                                                     </div>
                                                 </div>
+
+                                                {/* 思维训练过程 */}
+                                                {s.thinkingProcesses && s.thinkingProcesses.length > 0 && (
+                                                    <div className="lg:col-span-3 bg-white rounded-xl border border-slate-200 p-4">
+                                                        <h4 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                                                            🧠 思维训练过程
+                                                            <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full font-bold">
+                                                                {s.thinkingProcessCount} 次
+                                                            </span>
+                                                        </h4>
+                                                        <ThinkingProcessView processes={s.thinkingProcesses} />
+                                                    </div>
+                                                )}
                                             </div>
                                         </td>
                                     </tr>

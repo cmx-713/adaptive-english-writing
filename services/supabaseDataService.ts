@@ -456,7 +456,7 @@ export const getAgentUsageSummary = async () => {
  * 获取单个学生的详情及所有学习记录
  */
 export const getStudentDetail = async (userId: string) => {
-  const [essays, drills, scaffolds] = await Promise.all([
+  const [essays, drills, scaffolds, thinkingProcesses] = await Promise.all([
     supabase
       .from('wc_essay_grades')
       .select('*')
@@ -472,13 +472,19 @@ export const getStudentDetail = async (userId: string) => {
       .select('*')
       .eq('user_id', userId)
       .order('created_at', { ascending: false }),
+    supabase
+      .from('wc_thinking_process')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false }),
   ])
 
   return {
     essays: essays.data || [],
     drills: drills.data || [],
     scaffolds: scaffolds.data || [],
-    error: essays.error || drills.error || scaffolds.error,
+    thinkingProcesses: thinkingProcesses.data || [],
+    error: essays.error || drills.error || scaffolds.error || thinkingProcesses.error,
   }
 }
 
@@ -488,6 +494,102 @@ export const getStudentDetail = async (userId: string) => {
 export const getEssayGradesByUser = async (userId: string) => {
   const { data, error } = await supabase
     .from('wc_essay_grades')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+
+  return { data, error }
+}
+
+// ==========================================
+// 8. 思维过程数据（wc_thinking_process）
+// ==========================================
+
+/**
+ * 创建思维过程记录（学生提交新 topic 时调用）
+ * 返回新记录的 id，后续通过 id 更新
+ */
+export const createThinkingProcess = async (
+  userId: string,
+  topic: string,
+  inspirationCards: any[]
+) => {
+  try {
+    const { data, error } = await supabase
+      .from('wc_thinking_process')
+      .insert({
+        user_id: userId,
+        topic,
+        inspiration_cards: inspirationCards,
+        status: 'in_progress',
+      })
+      .select('id')
+      .single()
+
+    if (error) {
+      console.error('[Supabase] 创建思维过程记录失败:', error)
+      return { id: null, error }
+    }
+
+    console.log('[Supabase] ✅ 思维过程记录已创建:', data?.id)
+    return { id: data?.id || null, error: null }
+  } catch (err) {
+    console.error('[Supabase] 创建思维过程记录异常:', err)
+    return { id: null, error: err }
+  }
+}
+
+/**
+ * 增量更新思维过程记录（按 id 更新指定字段）
+ * 只传入需要更新的字段，不会覆盖其他字段
+ */
+export const updateThinkingProcess = async (
+  processId: string,
+  updates: {
+    user_ideas?: Record<string, string>
+    validation_results?: Record<string, any>
+    personalized_expansions?: Record<string, string[]>
+    dimension_drafts?: Record<string, any>
+    assembled_essay?: any
+    status?: 'in_progress' | 'completed' | 'sent_to_grader'
+  }
+) => {
+  try {
+    const { error } = await supabase
+      .from('wc_thinking_process')
+      .update(updates)
+      .eq('id', processId)
+
+    if (error) {
+      console.error('[Supabase] 更新思维过程记录失败:', error)
+    }
+  } catch (err) {
+    console.error('[Supabase] 更新思维过程记录异常:', err)
+  }
+}
+
+/**
+ * 获取所有思维过程记录（教师端）
+ */
+export const getAllThinkingProcesses = async (limit: number = 200) => {
+  const { data, error } = await supabase
+    .from('wc_thinking_process')
+    .select(`
+      *,
+      wc_users!inner(name, student_id)
+    `)
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  return { data, error }
+}
+
+/**
+ * 获取指定学生的思维过程记录
+ */
+export const getThinkingProcessByUser = async (userId: string) => {
+  const { data, error } = await supabase
+    .from('wc_thinking_process')
     .select('*')
     .eq('user_id', userId)
     .order('created_at', { ascending: false })

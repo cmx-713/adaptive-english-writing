@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { User } from '../types';
 import {
     getAllStudents, getAllEssayGrades, getAllDrillHistory,
-    getAllScaffoldHistory, getAgentUsageSummary,
+    getAllScaffoldHistory, getAgentUsageSummary, getAllThinkingProcesses,
 } from '../services/supabaseDataService';
 import OverviewTab from './teacher/OverviewTab';
 import AnalyticsTab from './teacher/AnalyticsTab';
@@ -25,23 +25,26 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
     const [drills, setDrills] = useState<any[]>([]);
     const [scaffolds, setScaffolds] = useState<any[]>([]);
     const [usageLogs, setUsageLogs] = useState<any[]>([]);
+    const [thinkingProcesses, setThinkingProcesses] = useState<any[]>([]);
 
     useEffect(() => {
         const fetchAll = async () => {
             setIsLoading(true);
             try {
-                const [studentsRes, essaysRes, drillsRes, scaffoldsRes, usageRes] = await Promise.all([
+                const [studentsRes, essaysRes, drillsRes, scaffoldsRes, usageRes, thinkingRes] = await Promise.all([
                     getAllStudents(),
                     getAllEssayGrades(500),
                     getAllDrillHistory(500),
                     getAllScaffoldHistory(500),
                     getAgentUsageSummary(),
+                    getAllThinkingProcesses(500),
                 ]);
                 setStudents(studentsRes.data || []);
                 setEssays(essaysRes.data || []);
                 setDrills(drillsRes.data || []);
                 setScaffolds(scaffoldsRes.data || []);
                 setUsageLogs(usageRes.data || []);
+                setThinkingProcesses(thinkingRes.data || []);
             } catch (err) {
                 console.error('[Teacher] 数据加载失败:', err);
             } finally {
@@ -99,8 +102,8 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                                 key={tab.key}
                                 onClick={() => setActiveTab(tab.key)}
                                 className={`px-5 py-3 text-sm font-bold whitespace-nowrap transition-all border-b-2 ${activeTab === tab.key
-                                        ? 'border-white text-white'
-                                        : 'border-transparent text-white/50 hover:text-white/80 hover:border-white/30'
+                                    ? 'border-white text-white'
+                                    : 'border-transparent text-white/50 hover:text-white/80 hover:border-white/30'
                                     }`}
                             >
                                 {tab.icon} {tab.label}
@@ -119,7 +122,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                     <AnalyticsTab essays={essays} students={students} isLoading={isLoading} />
                 )}
                 {activeTab === 'students' && (
-                    <StudentProfilesTab students={students} essays={essays} drills={drills} scaffolds={scaffolds} isLoading={isLoading} />
+                    <StudentProfilesTab students={students} essays={essays} drills={drills} scaffolds={scaffolds} thinkingProcesses={thinkingProcesses} isLoading={isLoading} />
                 )}
                 {activeTab === 'essays' && (
                     <EssayGalleryTab essays={essays} isLoading={isLoading} />

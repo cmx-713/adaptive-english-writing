@@ -6,8 +6,9 @@ import ResultsDisplay from '../components/ResultsDisplay';
 import HistoryModal from '../components/HistoryModal';
 import { fetchInspirationCards, fetchLanguageScaffolds, generateEssayIntroConclusion } from '../services/geminiService';
 import { getHistory, deleteFromHistory, saveToHistory, checkIsSaved } from '../services/storageService';
-import { saveScaffoldToSupabase, saveInspirationToSupabase, updateScaffoldDraft, saveAssembledEssayToSupabase, logAgentUsage } from '../services/supabaseDataService';
+import { saveScaffoldToSupabase, saveInspirationToSupabase, updateScaffoldDraft, saveAssembledEssayToSupabase, logAgentUsage, createThinkingProcess, updateThinkingProcess } from '../services/supabaseDataService';
 import { UserInput, InspirationCard, ScaffoldContent, FlowState, HistoryItem, InspirationHistoryData, DimensionDraft } from '../types';
+import { IdeaValidationResult } from '../services/geminiService';
 
 interface SocraticCoachProps {
   onSendToGrader?: (topic: string, essay: string) => void;
@@ -51,6 +52,9 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   // 会话计时
   const sessionStartRef = useRef<number>(Date.now());
 
+  // 思维过程记录 ID（用于后续更新同一条记录）
+  const thinkingProcessIdRef = useRef<string | null>(null);
+
   // Load history on mount
   const refreshHistory = () => {
     const scaffolds = getHistory('scaffold');
@@ -72,6 +76,8 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     setStep1Inputs({});
     setDimensionDrafts({}); // 新topic清空草稿
     setPersonalizedExpansions({}); // 清空个性化拓展
+    validationResultsRef.current = {}; // 清空累积验证结果
+    thinkingProcessIdRef.current = null; // 清空旧记录 ID
 
     try {
       const fetchedCards = await fetchInspirationCards(input.topic);
@@ -85,6 +91,10 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       // Supabase 双写（异步，不阻断前端）
       if (supabaseUserId) {
         saveInspirationToSupabase(supabaseUserId, input.topic, fetchedCards, {}).catch(() => { });
+        // 创建思维过程记录
+        createThinkingProcess(supabaseUserId, input.topic, fetchedCards)
+          .then(({ id }) => { thinkingProcessIdRef.current = id; })
+          .catch(() => { });
       }
 
       setFlowState('selecting_card');
@@ -95,9 +105,25 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     }
   };
 
+  // 防抖定时器（用于 user_ideas 同步）
+  const ideaSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Handle Input Changes in Step 1
   const handleStep1InputChange = (id: string, value: string) => {
-    setStep1Inputs(prev => ({ ...prev, [id]: value }));
+    setStep1Inputs(prev => {
+      const next = { ...prev, [id]: value };
+      // 防抖同步学生观点到 Supabase（1秒内无新输入才同步）
+      if (thinkingProcessIdRef.current && supabaseUserId) {
+        if (ideaSyncTimerRef.current) clearTimeout(ideaSyncTimerRef.current);
+        ideaSyncTimerRef.current = setTimeout(() => {
+          if (thinkingProcessIdRef.current) {
+            updateThinkingProcess(thinkingProcessIdRef.current, { user_ideas: next }).catch(() => { });
+          }
+        }, 1000);
+      }
+      return next;
+    });
+
   };
 
   // Step 2: Handle Card Selection + Idea -> Fetch Scaffolds
@@ -124,6 +150,22 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       if (supabaseUserId) {
         saveScaffoldToSupabase(supabaseUserId, currentTopic, result).catch(() => { });
       }
+      // 同步维度草稿数据到思维过程记录
+      if (thinkingProcessIdRef.current) {
+        const draftEntry = {
+          cardId: card.id,
+          dimension: card.dimension,
+          userIdea: userIdea,
+          draft: '',
+          scaffoldData: result
+        };
+        setDimensionDrafts(prev => {
+          // 这里不用 setState 更新，只是读取当前值来同步
+          const updatedDrafts = { ...prev, [card.id]: draftEntry };
+          updateThinkingProcess(thinkingProcessIdRef.current!, { dimension_drafts: updatedDrafts }).catch(() => { });
+          return prev; // 不实际改变 state，避免影响原有逻辑
+        });
+      }
       setFlowState('showing_result');
     } catch (err: any) {
       console.error(err);
@@ -139,7 +181,28 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
 
   // 个性化拓展回调（从 PhaseOneCards 接收 Layer 2 数据）
   const handlePersonalizedExpansion = (cardId: string, expansion: string[]) => {
-    setPersonalizedExpansions(prev => ({ ...prev, [cardId]: expansion }));
+    setPersonalizedExpansions(prev => {
+      const next = { ...prev, [cardId]: expansion };
+      // 同步到思维过程记录
+      if (thinkingProcessIdRef.current) {
+        updateThinkingProcess(thinkingProcessIdRef.current, { personalized_expansions: next }).catch(() => { });
+      }
+      return next;
+    });
+  };
+
+  // 累积的验证结果（用于合并后发送到 Supabase）
+  const validationResultsRef = useRef<Record<string, IdeaValidationResult>>({});
+
+  // 观点验证完成回调（从 PhaseOneCards 接收验证结果）
+  const handleValidationComplete = (cardId: string, result: IdeaValidationResult) => {
+    // 合并到累积结果中
+    validationResultsRef.current = { ...validationResultsRef.current, [cardId]: result };
+    if (thinkingProcessIdRef.current) {
+      updateThinkingProcess(thinkingProcessIdRef.current, {
+        validation_results: validationResultsRef.current
+      }).catch(() => { });
+    }
   };
 
   // 返回维度选择页面，同时保存当前草稿
@@ -162,6 +225,20 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
         // 记录使用日志（含时长）
         const duration = Math.round((Date.now() - sessionStartRef.current) / 1000);
         logAgentUsage(supabaseUserId, '思维训练', 'writing_system', duration).catch(() => { });
+      }
+      // 同步草稿到思维过程记录
+      if (thinkingProcessIdRef.current) {
+        const updatedDrafts = {
+          ...dimensionDrafts,
+          [activeCard.id]: {
+            cardId: activeCard.id,
+            dimension: activeCard.dimension,
+            userIdea: step1Inputs[activeCard.id] || '',
+            draft: currentDraftRef.current,
+            scaffoldData: scaffoldData || undefined
+          }
+        };
+        updateThinkingProcess(thinkingProcessIdRef.current, { dimension_drafts: updatedDrafts }).catch(() => { });
       }
     }
 
@@ -187,6 +264,14 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     setShowIntroRef(false);
     setShowConclusionRef(false);
     setFlowState('assembling_essay');
+
+    // 同步组合成文状态到思维过程记录
+    if (thinkingProcessIdRef.current) {
+      updateThinkingProcess(thinkingProcessIdRef.current, {
+        assembled_essay: { introduction: '', bodyParagraphs, conclusion: '' },
+        status: 'completed'
+      }).catch(() => { });
+    }
   };
 
   // 按需生成 AI 范例（点击"看看AI范例"时触发）
@@ -232,6 +317,14 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     }
 
     onSendToGrader(currentTopic, fullEssay);
+
+    // 同步组合成文内容和状态到思维过程记录
+    if (thinkingProcessIdRef.current) {
+      updateThinkingProcess(thinkingProcessIdRef.current, {
+        assembled_essay: assembledEssay,
+        status: 'sent_to_grader'
+      }).catch(() => { });
+    }
   };
 
   const resetApp = () => {
@@ -248,6 +341,8 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     setShowIntroRef(false);
     setShowConclusionRef(false);
     currentDraftRef.current = '';
+    validationResultsRef.current = {};
+    thinkingProcessIdRef.current = null;
   };
 
   // History Handlers
@@ -331,6 +426,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
             dimensionDrafts={dimensionDrafts}
             onAssembleEssay={handleAssembleEssay}
             onPersonalizedExpansion={handlePersonalizedExpansion}
+            onValidationComplete={handleValidationComplete}
           />
         </div>
       )}
