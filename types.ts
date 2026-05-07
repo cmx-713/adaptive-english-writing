@@ -94,8 +94,10 @@ export interface User {
   name: string;
   studentId: string;
   className?: string; // 班级名称
-  id?: string; // Supabase UUID from wc_users table
-  role?: 'student' | 'teacher'; // 用户角色
+  id?: string;        // Supabase UUID from wc_users table
+  role?: 'student' | 'teacher' | 'external_student';
+  email?: string;     // 外校用户邮箱
+  school?: string;    // 外校用户学校/学院
 }
 
 // --- API SETTINGS ---

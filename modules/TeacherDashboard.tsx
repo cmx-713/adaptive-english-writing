@@ -3,18 +3,69 @@ import { User } from '../types';
 import {
     getAllStudents, getAllEssayGrades, getAllDrillHistory,
     getAllScaffoldHistory, getAgentUsageSummary, getAllThinkingProcesses,
-    updateStudentClass,
+    updateStudentClass, getExternalUsers,
 } from '../services/supabaseDataService';
+// 外校用户列表组件（内联）
+const ExternalUsersTab: React.FC<{ users: any[]; isLoading: boolean }> = ({ users, isLoading }) => {
+    const [search, setSearch] = useState('');
+    const filtered = users.filter(u =>
+        u.name?.includes(search) || u.school?.includes(search) || u.email?.includes(search)
+    );
+    if (isLoading) return <div className="flex items-center justify-center h-96"><div className="animate-spin w-8 h-8 border-4 border-[#1e2d4a] border-t-transparent rounded-full" /></div>;
+    return (
+        <div className="space-y-5 animate-fade-in-up">
+            <div className="flex items-center justify-between gap-4">
+                <div>
+                    <h2 className="text-xl font-bold text-slate-800">🌐 外校注册用户</h2>
+                    <p className="text-sm text-slate-500 mt-0.5">共 <strong>{users.length}</strong> 位外校用户注册，仅可使用学生端功能，无法访问教师后台。</p>
+                </div>
+                <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+                    placeholder="搜索姓名 / 学校 / 邮箱"
+                    className="px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white outline-none focus:border-[#1e2d4a]/30 w-56" />
+            </div>
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <table className="w-full text-sm">
+                    <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200">
+                            <th className="text-left py-3 px-4 font-bold text-slate-600">姓名</th>
+                            <th className="text-left py-3 px-4 font-bold text-slate-600">学校 / 学院</th>
+                            <th className="text-left py-3 px-4 font-bold text-slate-600">邮箱</th>
+                            <th className="text-center py-3 px-4 font-bold text-slate-600">注册时间</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {filtered.map((u, i) => (
+                            <tr key={u.id || i} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                                <td className="py-3 px-4 font-medium text-slate-800">{u.name}</td>
+                                <td className="py-3 px-4 text-slate-600">{u.school || <span className="text-slate-300">—</span>}</td>
+                                <td className="py-3 px-4 text-slate-500 font-mono text-xs">{u.email}</td>
+                                <td className="py-3 px-4 text-center text-xs text-slate-400">
+                                    {u.created_at ? new Date(u.created_at).toLocaleDateString('zh-CN') : '—'}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+                {filtered.length === 0 && (
+                    <div className="text-center text-slate-400 py-12">
+                        {users.length === 0 ? '暂无外校用户注册' : '没有匹配的结果'}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
+import OverviewTab from './teacher/OverviewTab';
 
 // 预定义的班级列表（固定，不依赖数据库动态提取）
 const PREDEFINED_CLASSES = ['2024级A甲6', '2024级A乙6', '2025级A甲2', '2025级A乙2'];
-import OverviewTab from './teacher/OverviewTab';
 import AnalyticsTab from './teacher/AnalyticsTab';
 import StudentProfilesTab from './teacher/StudentProfilesTab';
 import EssayGalleryTab from './teacher/EssayGalleryTab';
 import UsageTab from './teacher/UsageTab';
 
-type TeacherTab = 'overview' | 'analytics' | 'students' | 'essays' | 'usage';
+type TeacherTab = 'overview' | 'analytics' | 'students' | 'essays' | 'usage' | 'external';
 
 interface TeacherDashboardProps {
     user: User;
@@ -30,18 +81,20 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
     const [scaffolds, setScaffolds] = useState<any[]>([]);
     const [usageLogs, setUsageLogs] = useState<any[]>([]);
     const [thinkingProcesses, setThinkingProcesses] = useState<any[]>([]);
+    const [externalUsers, setExternalUsers] = useState<any[]>([]);
 
     useEffect(() => {
         const fetchAll = async () => {
             setIsLoading(true);
             try {
-                const [studentsRes, essaysRes, drillsRes, scaffoldsRes, usageRes, thinkingRes] = await Promise.all([
+                const [studentsRes, essaysRes, drillsRes, scaffoldsRes, usageRes, thinkingRes, externalRes] = await Promise.all([
                     getAllStudents(),
                     getAllEssayGrades(500),
                     getAllDrillHistory(500),
                     getAllScaffoldHistory(500),
                     getAgentUsageSummary(),
                     getAllThinkingProcesses(500),
+                    getExternalUsers(),
                 ]);
                 setStudents(studentsRes.data || []);
                 setEssays(essaysRes.data || []);
@@ -49,6 +102,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                 setScaffolds(scaffoldsRes.data || []);
                 setUsageLogs(usageRes.data || []);
                 setThinkingProcesses(thinkingRes.data || []);
+                setExternalUsers(externalRes.data || []);
             } catch (err) {
                 console.error('[Teacher] 数据加载失败:', err);
             } finally {
@@ -97,6 +151,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
         { key: 'students', label: '学生档案', icon: '👤' },
         { key: 'essays', label: '作文详情', icon: '📝' },
         { key: 'usage', label: '使用统计', icon: '🔥' },
+        { key: 'external', label: '外校用户', icon: '🌐' },
     ];
 
     return (
@@ -248,6 +303,9 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                 )}
                 {activeTab === 'usage' && (
                     <UsageTab essays={filtered.essays} drills={filtered.drills} scaffolds={filtered.scaffolds} usageLogs={filtered.usageLogs} isLoading={isLoading} />
+                )}
+                {activeTab === 'external' && (
+                    <ExternalUsersTab users={externalUsers} isLoading={isLoading} />
                 )}
             </main>
 

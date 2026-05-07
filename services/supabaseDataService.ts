@@ -74,6 +74,83 @@ export const quickSignInSupabase = async (studentId: string, name: string, class
   }
 }
 
+// ==========================================
+// 外校用户（external_student）快速登录
+// ==========================================
+
+/**
+ * 外校用户快速登录/创建：按 student_id 查找或新建
+ * 与内部学生的 quickSignInSupabase 逻辑一致，但 role = 'external_student'
+ */
+export const quickSignInExternal = async (
+  studentId: string,
+  name: string,
+  school: string
+) => {
+  // 加 ext_ 前缀，避免与内部学生的 student_id 冲突（全局唯一约束）
+  const externalId = `ext_${studentId}`
+
+  try {
+    // 查找已存在的外校用户
+    const { data: existing } = await supabase
+      .from('wc_users')
+      .select('*')
+      .eq('student_id', externalId)
+      .single()
+
+    if (existing) {
+      // 学校信息为空或有变化时更新
+      if (school && existing.school !== school) {
+        const { error: updateError } = await supabase
+          .from('wc_users')
+          .update({ school })
+          .eq('id', existing.id)
+        if (updateError) {
+          console.error('[Supabase] 更新外校用户 school 失败:', updateError)
+        } else {
+          existing.school = school
+        }
+      }
+      return { data: existing, error: null }
+    }
+
+    // 不存在则创建
+    const { data: newUser, error: insertError } = await supabase
+      .from('wc_users')
+      .insert({
+        student_id: externalId,
+        name,
+        school: school || null,
+        email: `${externalId}@external.local`,
+        role: 'external_student',
+      })
+      .select()
+      .single()
+
+    if (insertError) {
+      console.error('[Supabase] 创建外校用户失败:', insertError)
+      return { data: null, error: insertError }
+    }
+
+    return { data: newUser, error: null }
+  } catch (err) {
+    console.error('[Supabase] quickSignInExternal 异常:', err)
+    return { data: null, error: err }
+  }
+}
+
+/**
+ * 教师端：查询所有外校注册用户
+ */
+export const getExternalUsers = async () => {
+  const { data, error } = await supabase
+    .from('wc_users')
+    .select('id, name, email, school, created_at')
+    .eq('role', 'external_student')
+    .order('created_at', { ascending: false })
+  return { data, error }
+}
+
 /**
  * 教师端：更新学生所在班级
  */

@@ -10,7 +10,7 @@ import LoginScreen from './components/LoginScreen';
 import SettingsModal from './components/SettingsModal';
 import ErrorBoundary from './components/ErrorBoundary';
 import { User, ApiConfig, Tab } from './types';
-import { quickSignInSupabase } from './services/supabaseDataService';
+import { quickSignInSupabase, quickSignInExternal } from './services/supabaseDataService';
 
 const DEFAULT_CONFIG: ApiConfig = {
   provider: 'google',
@@ -51,7 +51,15 @@ const App: React.FC = () => {
       if (savedUser) {
         try {
           const parsed = JSON.parse(savedUser) as User;
-          // 学生用户若没有班级信息，清除旧会话让其重新登录选择班级
+
+          // 外校用户：有 id 直接恢复（与内部学生相同逻辑）
+          if (parsed.role === 'external_student') {
+            setUser(parsed);
+            setIsLoadingUser(false);
+            return;
+          }
+
+          // 班级学生若没有班级信息，清除旧会话让其重新登录
           if (!parsed.className && parsed.role !== 'teacher') {
             localStorage.removeItem('cet_student_user');
             setIsLoadingUser(false);
@@ -94,7 +102,23 @@ const App: React.FC = () => {
   }, []);
 
   const handleLogin = async (newUser: User) => {
-    // 在 Supabase 中查找或创建用户，获取 UUID
+    // 外校用户：quickSignInExternal（与内部学生逻辑一致，无需 Supabase Auth）
+    if (newUser.role === 'external_student') {
+      const { data, error } = await quickSignInExternal(newUser.studentId, newUser.name, newUser.school || '');
+      if (error) {
+        // 数据库写入失败（如 school 列不存在），抛出错误让 LoginScreen 显示提示
+        throw new Error('登录失败，请联系管理员（数据库配置异常）');
+      }
+      const enrichedUser: User = {
+        ...newUser,
+        id: data?.id || undefined,
+        school: data?.school || newUser.school || undefined,
+      };
+      localStorage.setItem('cet_student_user', JSON.stringify(enrichedUser));
+      setUser(enrichedUser);
+      return;
+    }
+    // 班级学生 / 教师：原有快速登录逻辑，不变
     const { data } = await quickSignInSupabase(newUser.studentId, newUser.name, newUser.className);
     const enrichedUser: User = {
       ...newUser,
