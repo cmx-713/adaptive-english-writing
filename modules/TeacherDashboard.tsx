@@ -1,9 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { User } from '../types';
 import {
     getAllStudents, getAllEssayGrades, getAllDrillHistory,
     getAllScaffoldHistory, getAgentUsageSummary, getAllThinkingProcesses,
+    updateStudentClass,
 } from '../services/supabaseDataService';
+
+// 预定义的班级列表（固定，不依赖数据库动态提取）
+const PREDEFINED_CLASSES = ['2024级A甲6', '2024级A乙6', '2025级A甲2', '2025级A乙2'];
 import OverviewTab from './teacher/OverviewTab';
 import AnalyticsTab from './teacher/AnalyticsTab';
 import StudentProfilesTab from './teacher/StudentProfilesTab';
@@ -54,6 +58,39 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
         fetchAll();
     }, []);
 
+    // 班级过滤
+    const [selectedClass, setSelectedClass] = useState<string>('all');
+
+    // 固定使用预定义班级列表，不依赖数据库动态提取
+    const classList = PREDEFINED_CLASSES;
+
+    // 教师在后台直接为学生分配班级
+    const handleUpdateStudentClass = async (userId: string, className: string) => {
+        const { error } = await updateStudentClass(userId, className || null);
+        if (!error) {
+            setStudents(prev => prev.map((s: any) =>
+                s.id === userId ? { ...s, class_name: className || null } : s
+            ));
+        }
+    };
+
+    // 根据选中班级过滤所有数据
+    const filtered = useMemo(() => {
+        if (selectedClass === 'all') {
+            return { students, essays, drills, scaffolds, thinkingProcesses, usageLogs };
+        }
+        const filteredStudents = students.filter((s: any) => s.class_name === selectedClass);
+        const studentIds = new Set(filteredStudents.map((s: any) => s.id));
+        return {
+            students: filteredStudents,
+            essays: essays.filter((e: any) => studentIds.has(e.user_id)),
+            drills: drills.filter((d: any) => studentIds.has(d.user_id)),
+            scaffolds: scaffolds.filter((s: any) => studentIds.has(s.user_id)),
+            thinkingProcesses: thinkingProcesses.filter((t: any) => studentIds.has(t.user_id)),
+            usageLogs: usageLogs.filter((u: any) => studentIds.has(u.user_id)),
+        };
+    }, [selectedClass, students, essays, drills, scaffolds, thinkingProcesses, usageLogs]);
+
     const tabs: { key: TeacherTab; label: string; icon: string }[] = [
         { key: 'overview', label: '教学概览', icon: '📊' },
         { key: 'analytics', label: '学情分析', icon: '📈' },
@@ -81,6 +118,18 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
 
                     {/* User */}
                     <div className="flex items-center gap-4">
+                        {/* 班级选择器 */}
+                        <select
+                            value={selectedClass}
+                            onChange={(e) => setSelectedClass(e.target.value)}
+                            className="bg-white/10 text-white text-sm font-medium rounded-lg px-3 py-1.5 border border-white/20 outline-none hover:bg-white/20 transition-colors appearance-none cursor-pointer"
+                            style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='white' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E")`, backgroundPosition: 'right 0.5rem center', backgroundRepeat: 'no-repeat', backgroundSize: '1em 1em', paddingRight: '2rem' }}
+                        >
+                            <option value="all" style={{ color: '#1e293b' }}>全部班级</option>
+                            {classList.map(c => (
+                                <option key={c} value={c} style={{ color: '#1e293b' }}>{c}</option>
+                            ))}
+                        </select>
                         <div className="text-right">
                             <div className="text-sm font-bold">{user.name}</div>
                             <div className="text-[10px] text-white/50">教师</div>
@@ -115,20 +164,90 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
 
             {/* Content */}
             <main className="max-w-7xl mx-auto px-4 py-8">
+
+                {/* 当前班级 Banner */}
+                <div className="mb-6 flex items-center gap-3 px-5 py-3 bg-white rounded-2xl border border-slate-200 shadow-sm">
+                    <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${selectedClass === 'all' ? 'bg-slate-400' : 'bg-[#1e2d4a]'}`}></div>
+                    <span className="text-sm font-bold text-slate-700">
+                        {selectedClass === 'all' ? '全部班级' : selectedClass}
+                    </span>
+                    <span className="text-slate-300">·</span>
+                    <span className="text-sm text-slate-500">
+                        {filtered.students.length} 名学生
+                    </span>
+                    <span className="text-slate-300">·</span>
+                    <span className="text-sm text-slate-500">
+                        {filtered.essays.length} 篇作文
+                    </span>
+                    <span className="text-slate-300">·</span>
+                    <span className="text-sm text-slate-500">
+                        {filtered.drills.length} 次特训
+                    </span>
+                    {selectedClass !== 'all' && (
+                        <>
+                            <span className="text-slate-300">·</span>
+                            <span className="text-sm text-slate-500">
+                                均分 <strong className="text-slate-700">
+                                    {filtered.essays.length > 0
+                                        ? (filtered.essays.reduce((s: number, e: any) => s + (e.total_score || 0), 0) / filtered.essays.length).toFixed(1)
+                                        : '—'}
+                                </strong> / 15
+                            </span>
+                        </>
+                    )}
+                    <div className="ml-auto flex gap-1.5 flex-wrap justify-end">
+                        {classList.map(cls => (
+                            <button
+                                key={cls}
+                                onClick={() => setSelectedClass(cls)}
+                                className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-all ${selectedClass === cls
+                                    ? 'bg-[#1e2d4a] text-white'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                }`}
+                            >
+                                {cls}
+                            </button>
+                        ))}
+                        <button
+                            onClick={() => setSelectedClass('all')}
+                            className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-all ${selectedClass === 'all'
+                                ? 'bg-slate-700 text-white'
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                            }`}
+                        >
+                            全部
+                        </button>
+                    </div>
+                </div>
+
                 {activeTab === 'overview' && (
-                    <OverviewTab students={students} essays={essays} drills={drills} scaffolds={scaffolds} isLoading={isLoading} />
+                    <OverviewTab
+                        students={filtered.students} essays={filtered.essays}
+                        drills={filtered.drills} scaffolds={filtered.scaffolds}
+                        isLoading={isLoading}
+                        selectedClass={selectedClass}
+                        allStudents={students}
+                        allEssays={essays}
+                    />
                 )}
                 {activeTab === 'analytics' && (
-                    <AnalyticsTab essays={essays} students={students} isLoading={isLoading} />
+                    <AnalyticsTab essays={filtered.essays} students={filtered.students} isLoading={isLoading} />
                 )}
                 {activeTab === 'students' && (
-                    <StudentProfilesTab students={students} essays={essays} drills={drills} scaffolds={scaffolds} thinkingProcesses={thinkingProcesses} isLoading={isLoading} />
+                    <StudentProfilesTab
+                        students={filtered.students} essays={filtered.essays}
+                        drills={filtered.drills} scaffolds={filtered.scaffolds}
+                        thinkingProcesses={filtered.thinkingProcesses}
+                        isLoading={isLoading}
+                        selectedClass={selectedClass}
+                        onUpdateStudentClass={handleUpdateStudentClass}
+                    />
                 )}
                 {activeTab === 'essays' && (
-                    <EssayGalleryTab essays={essays} isLoading={isLoading} />
+                    <EssayGalleryTab essays={filtered.essays} isLoading={isLoading} />
                 )}
                 {activeTab === 'usage' && (
-                    <UsageTab essays={essays} drills={drills} scaffolds={scaffolds} usageLogs={usageLogs} isLoading={isLoading} />
+                    <UsageTab essays={filtered.essays} drills={filtered.drills} scaffolds={filtered.scaffolds} usageLogs={filtered.usageLogs} isLoading={isLoading} />
                 )}
             </main>
 

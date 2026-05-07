@@ -51,12 +51,18 @@ const App: React.FC = () => {
       if (savedUser) {
         try {
           const parsed = JSON.parse(savedUser) as User;
+          // 学生用户若没有班级信息，清除旧会话让其重新登录选择班级
+          if (!parsed.className && parsed.role !== 'teacher') {
+            localStorage.removeItem('cet_student_user');
+            setIsLoadingUser(false);
+            return;
+          }
           // 如果已有 Supabase id，直接恢复
           if (parsed.id) {
             setUser(parsed);
           } else {
             // 旧格式用户：补充 Supabase id
-            const { data } = await quickSignInSupabase(parsed.studentId, parsed.name);
+            const { data } = await quickSignInSupabase(parsed.studentId, parsed.name, parsed.className);
             const enrichedUser: User = {
               ...parsed,
               id: data?.id || undefined,
@@ -89,11 +95,12 @@ const App: React.FC = () => {
 
   const handleLogin = async (newUser: User) => {
     // 在 Supabase 中查找或创建用户，获取 UUID
-    const { data } = await quickSignInSupabase(newUser.studentId, newUser.name);
+    const { data } = await quickSignInSupabase(newUser.studentId, newUser.name, newUser.className);
     const enrichedUser: User = {
       ...newUser,
       id: data?.id || undefined,
       role: data?.role || 'student',
+      className: newUser.className || data?.class_name || undefined,
     };
     localStorage.setItem('cet_student_user', JSON.stringify(enrichedUser));
     setUser(enrichedUser);

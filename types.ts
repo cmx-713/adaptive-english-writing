@@ -93,6 +93,7 @@ export interface DraftFeedback {
 export interface User {
   name: string;
   studentId: string;
+  className?: string; // 班级名称
   id?: string; // Supabase UUID from wc_users table
   role?: 'student' | 'teacher'; // 用户角色
 }

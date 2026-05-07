@@ -92,9 +92,19 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       if (supabaseUserId) {
         saveInspirationToSupabase(supabaseUserId, input.topic, fetchedCards, {}).catch(() => { });
         // 创建思维过程记录
+        console.log('[ThinkingProcess] 正在创建, userId:', supabaseUserId, 'topic:', input.topic);
         createThinkingProcess(supabaseUserId, input.topic, fetchedCards)
-          .then(({ id }) => { thinkingProcessIdRef.current = id; })
-          .catch(() => { });
+          .then(({ id, error }) => {
+            if (id) {
+              thinkingProcessIdRef.current = id;
+              console.log('[ThinkingProcess] ✅ 创建成功, id:', id);
+            } else {
+              console.error('[ThinkingProcess] ❌ 创建失败, id 为 null, error:', error);
+            }
+          })
+          .catch((err) => { console.error('[ThinkingProcess] ❌ 创建异常:', err); });
+      } else {
+        console.warn('[ThinkingProcess] ⚠️ supabaseUserId 为空，跳过创建');
       }
 
       setFlowState('selecting_card');

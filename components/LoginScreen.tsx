@@ -9,8 +9,16 @@ interface LoginScreenProps {
 const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
   const [name, setName] = useState('');
   const [studentId, setStudentId] = useState('');
+  const [className, setClassName] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  const CLASS_OPTIONS = [
+    '2024级A甲6',
+    '2024级A乙6',
+    '2025级A甲2',
+    '2025级A乙2',
+  ];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,10 +26,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
       setError('请输入姓名和学号');
       return;
     }
+    if (!className) {
+      setError('请选择班级');
+      return;
+    }
     setIsLoading(true);
     setError('');
     try {
-      await onLogin({ name: name.trim(), studentId: studentId.trim() });
+      await onLogin({ name: name.trim(), studentId: studentId.trim(), className });
     } catch (err) {
       setError('登录失败，请重试');
     } finally {
@@ -86,6 +98,24 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                   placeholder="请输入您的学号"
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-[#f4f6f9] focus:bg-white focus:border-[#1e2d4a]/30 focus:ring-4 focus:ring-[#1e2d4a]/5 outline-none transition-all text-slate-800 placeholder-slate-300"
                 />
+              </div>
+
+              <div>
+                <label htmlFor="className" className="block text-sm font-bold text-slate-600 mb-2 uppercase tracking-wider">
+                  班级 <span className="text-slate-400 normal-case">(Class)</span>
+                </label>
+                <select
+                  id="className"
+                  value={className}
+                  onChange={(e) => setClassName(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-[#f4f6f9] focus:bg-white focus:border-[#1e2d4a]/30 focus:ring-4 focus:ring-[#1e2d4a]/5 outline-none transition-all text-slate-800 appearance-none"
+                  style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E")`, backgroundPosition: 'right 0.75rem center', backgroundRepeat: 'no-repeat', backgroundSize: '1.25em 1.25em', paddingRight: '2.5rem' }}
+                >
+                  <option value="">请选择班级</option>
+                  {CLASS_OPTIONS.map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
               </div>
 
               {error && (

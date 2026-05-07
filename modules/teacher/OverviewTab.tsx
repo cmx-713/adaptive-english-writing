@@ -1,11 +1,8 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-    RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
+    RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Cell, LabelList,
 } from 'recharts';
-import {
-    getAllStudents, getAllEssayGrades, getAllDrillHistory, getAllScaffoldHistory,
-} from '../../services/supabaseDataService';
 
 interface OverviewTabProps {
     students: any[];
@@ -13,6 +10,9 @@ interface OverviewTabProps {
     drills: any[];
     scaffolds: any[];
     isLoading: boolean;
+    selectedClass?: string;
+    allStudents?: any[];
+    allEssays?: any[];
 }
 
 const StatCard: React.FC<{
@@ -30,7 +30,45 @@ const StatCard: React.FC<{
     </div>
 );
 
-const OverviewTab: React.FC<OverviewTabProps> = ({ students, essays, drills, scaffolds, isLoading }) => {
+// 班级颜色映射（固定 4 个班）
+const CLASS_COLORS: Record<string, string> = {
+    '2024级A甲6': '#1e2d4a',
+    '2024级A乙6': '#3b82f6',
+    '2025级A甲2': '#10b981',
+    '2025级A乙2': '#f59e0b',
+};
+const getClassColor = (cls: string) => CLASS_COLORS[cls] || '#94a3b8';
+
+const OverviewTab: React.FC<OverviewTabProps> = ({
+    students, essays, drills, scaffolds, isLoading,
+    selectedClass = 'all', allStudents = [], allEssays = [],
+}) => {
+    // 班级对比数据（只在"全部班级"视图下计算）
+    const classComparisonData = useMemo(() => {
+        if (selectedClass !== 'all' || allStudents.length === 0) return [];
+        const classMap: Record<string, { studentIds: Set<string>; essays: any[] }> = {};
+        allStudents.forEach((s: any) => {
+            const cls = s.class_name || '未分班';
+            if (!classMap[cls]) classMap[cls] = { studentIds: new Set(), essays: [] };
+            classMap[cls].studentIds.add(s.id);
+        });
+        allEssays.forEach((e: any) => {
+            Object.values(classMap).forEach((v) => {
+                if (v.studentIds.has(e.user_id)) v.essays.push(e);
+            });
+        });
+        return Object.entries(classMap)
+            .map(([cls, { studentIds, essays: cEssays }]) => ({
+                班级: cls,
+                学生人数: studentIds.size,
+                平均分: cEssays.length > 0
+                    ? +(cEssays.reduce((s: number, e: any) => s + (e.total_score || 0), 0) / cEssays.length).toFixed(1)
+                    : 0,
+                批改篇数: cEssays.length,
+            }))
+            .sort((a, b) => a.班级.localeCompare(b.班级));
+    }, [selectedClass, allStudents, allEssays]);
+
     // 计算统计数据
     const stats = useMemo(() => {
         const totalStudents = students.length;
@@ -99,6 +137,8 @@ const OverviewTab: React.FC<OverviewTabProps> = ({ students, essays, drills, sca
         return { totalStudents, totalEssays, totalDrills, avgScore, scoreDistribution, radarData, topErrors, recentActivities };
     }, [students, essays, drills, scaffolds]);
 
+    const avgScoreLabel = selectedClass === 'all' ? '全体平均分' : `${selectedClass} 均分`;
+
     if (isLoading) {
         return (
             <div className="flex items-center justify-center h-96">
@@ -113,9 +153,46 @@ const OverviewTab: React.FC<OverviewTabProps> = ({ students, essays, drills, sca
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <StatCard icon="👥" value={stats.totalStudents} label="注册学生" sub="总计" />
                 <StatCard icon="✍️" value={stats.totalEssays} label="批改篇数" sub="累计" accent="bg-blue-600" />
-                <StatCard icon="📊" value={stats.avgScore} label="班级平均分" sub="/15分" accent="bg-emerald-600" />
+                <StatCard icon="📊" value={stats.avgScore} label={avgScoreLabel} sub="/15分" accent="bg-emerald-600" />
                 <StatCard icon="🏋️" value={stats.totalDrills} label="特训次数" sub="累计" accent="bg-amber-600" />
             </div>
+
+            {/* 班级横向对比（仅"全部班级"时显示） */}
+            {selectedClass === 'all' && classComparisonData.length > 0 && (
+                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                    <h3 className="font-serif font-bold text-lg text-slate-800 mb-1">🏫 班级横向对比</h3>
+                    <p className="text-xs text-slate-400 mb-5">各班平均分（满分 15 分）与参与人数</p>
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                        {classComparisonData.map((cls) => (
+                            <div key={cls.班级} className="rounded-xl border border-slate-100 p-4 bg-slate-50">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: getClassColor(cls.班级) }}></span>
+                                    <span className="text-xs font-bold text-slate-700 truncate">{cls.班级}</span>
+                                </div>
+                                <div className="text-2xl font-bold font-serif text-slate-800">{cls.平均分 || '—'}</div>
+                                <div className="text-[11px] text-slate-400 mt-1">{cls.学生人数} 人 · {cls.批改篇数} 篇</div>
+                            </div>
+                        ))}
+                    </div>
+                    <ResponsiveContainer width="100%" height={200}>
+                        <BarChart data={classComparisonData} margin={{ top: 16, right: 16, left: 0, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                            <XAxis dataKey="班级" tick={{ fontSize: 11, fill: '#64748b' }} />
+                            <YAxis domain={[0, 15]} tick={{ fontSize: 11, fill: '#64748b' }} />
+                            <Tooltip
+                                contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0', fontSize: '13px' }}
+                                formatter={(value: any, name: string) => [value, name]}
+                            />
+                            <Bar dataKey="平均分" name="平均分" radius={[8, 8, 0, 0]} maxBarSize={60}>
+                                {classComparisonData.map((entry) => (
+                                    <Cell key={entry.班级} fill={getClassColor(entry.班级)} />
+                                ))}
+                                <LabelList dataKey="平均分" position="top" style={{ fontSize: 12, fontWeight: 700, fill: '#475569' }} />
+                            </Bar>
+                        </BarChart>
+                    </ResponsiveContainer>
+                </div>
+            )}
 
             {/* 图表区域 */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

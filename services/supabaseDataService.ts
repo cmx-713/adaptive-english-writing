@@ -28,7 +28,7 @@ import {
  * 快速登录/注册：根据学号查找或创建用户
  * 保持与 authService.quickSignIn 相同的逻辑
  */
-export const quickSignInSupabase = async (studentId: string, name: string) => {
+export const quickSignInSupabase = async (studentId: string, name: string, className?: string) => {
   try {
     // 查找已存在的用户
     const { data: existingUser, error: findError } = await supabase
@@ -38,6 +38,14 @@ export const quickSignInSupabase = async (studentId: string, name: string) => {
       .single()
 
     if (existingUser) {
+      // 如果传入了 className 且与当前不同，则更新
+      if (className && existingUser.class_name !== className) {
+        await supabase
+          .from('wc_users')
+          .update({ class_name: className })
+          .eq('id', existingUser.id)
+        existingUser.class_name = className
+      }
       return { data: existingUser, error: null }
     }
 
@@ -49,6 +57,7 @@ export const quickSignInSupabase = async (studentId: string, name: string) => {
         name,
         email: `${studentId}@student.local`,
         role: 'student',
+        class_name: className || null,
       })
       .select()
       .single()
@@ -62,6 +71,26 @@ export const quickSignInSupabase = async (studentId: string, name: string) => {
   } catch (err) {
     console.error('[Supabase] quickSignIn 异常:', err)
     return { data: null, error: err }
+  }
+}
+
+/**
+ * 教师端：更新学生所在班级
+ */
+export const updateStudentClass = async (userId: string, className: string | null) => {
+  try {
+    const { error } = await supabase
+      .from('wc_users')
+      .update({ class_name: className || null })
+      .eq('id', userId)
+
+    if (error) {
+      console.error('[Supabase] 更新学生班级失败:', error)
+    }
+    return { error }
+  } catch (err) {
+    console.error('[Supabase] 更新学生班级异常:', err)
+    return { error: err }
   }
 }
 
