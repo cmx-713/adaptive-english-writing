@@ -173,18 +173,6 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
 
                     {/* User */}
                     <div className="flex items-center gap-4">
-                        {/* 班级选择器 */}
-                        <select
-                            value={selectedClass}
-                            onChange={(e) => setSelectedClass(e.target.value)}
-                            className="bg-white/10 text-white text-sm font-medium rounded-lg px-3 py-1.5 border border-white/20 outline-none hover:bg-white/20 transition-colors appearance-none cursor-pointer"
-                            style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='white' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E")`, backgroundPosition: 'right 0.5rem center', backgroundRepeat: 'no-repeat', backgroundSize: '1em 1em', paddingRight: '2rem' }}
-                        >
-                            <option value="all" style={{ color: '#1e293b' }}>全部班级</option>
-                            {classList.map(c => (
-                                <option key={c} value={c} style={{ color: '#1e293b' }}>{c}</option>
-                            ))}
-                        </select>
                         <div className="text-right">
                             <div className="text-sm font-bold">{user.name}</div>
                             <div className="text-[10px] text-white/50">教师</div>
@@ -250,7 +238,17 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                             </span>
                         </>
                     )}
-                    <div className="ml-auto flex gap-1.5 flex-wrap justify-end">
+                    <div className="ml-auto flex items-center gap-1.5 flex-wrap justify-end">
+                        <span className="text-xs text-slate-400 mr-1">筛选班级：</span>
+                        <button
+                            onClick={() => setSelectedClass('all')}
+                            className={`text-xs px-2.5 py-1 rounded-lg font-bold transition-all ${selectedClass === 'all'
+                                ? 'bg-[#1e2d4a] text-white'
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                            }`}
+                        >
+                            全部
+                        </button>
                         {classList.map(cls => (
                             <button
                                 key={cls}
@@ -263,15 +261,6 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                                 {cls}
                             </button>
                         ))}
-                        <button
-                            onClick={() => setSelectedClass('all')}
-                            className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-all ${selectedClass === 'all'
-                                ? 'bg-slate-700 text-white'
-                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                            }`}
-                        >
-                            全部
-                        </button>
                     </div>
                 </div>
 
