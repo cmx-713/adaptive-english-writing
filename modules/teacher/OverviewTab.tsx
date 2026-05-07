@@ -181,7 +181,7 @@ const OverviewTab: React.FC<OverviewTabProps> = ({
                             <YAxis domain={[0, 15]} tick={{ fontSize: 11, fill: '#64748b' }} />
                             <Tooltip
                                 contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0', fontSize: '13px' }}
-                                formatter={(value: any, name: string) => [value, name]}
+                                formatter={(value: any, name: string | undefined) => [value, name ?? '']}
                             />
                             <Bar dataKey="平均分" name="平均分" radius={[8, 8, 0, 0]} maxBarSize={60}>
                                 {classComparisonData.map((entry) => (
