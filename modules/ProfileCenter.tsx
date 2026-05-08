@@ -3,6 +3,7 @@ import { getAllLearningStats, LearningStats, getHistory, getAggregatedUserVocab,
 import { HistoryItem, ScaffoldContent, EssayHistoryData, AggregatedError, CritiqueCategory, EssayGradeResult, Tab, VocabularyItem } from '../types';
 import ResultsDisplay from '../components/ResultsDisplay';
 import GradingReport from '../components/GradingReport';
+import { getThinkingProcessByUser } from '../services/supabaseDataService';
 
 interface ProfileCenterProps {
   isActive: boolean;
@@ -369,8 +370,9 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
   const [showDimensionTrends, setShowDimensionTrends] = useState(false); // 🆕 4维度历史趋势折叠状态
   const [showTrainingPreview, setShowTrainingPreview] = useState(false); // 🆕 训练预览对话框
   const [pendingTrainingCategory, setPendingTrainingCategory] = useState<CritiqueCategory | null>(null); // 🆕 待训练的维度
-  const [showAllHistory, setShowAllHistory] = useState(false); // 🆕 学习活动档案展开状态
-  const [activeVaultTab, setActiveVaultTab] = useState<'vocabulary' | 'collocations'>('vocabulary'); // 🆕 语料库Tab状态
+  const [showAllHistory, setShowAllHistory] = useState(false);
+  const [activeVaultTab, setActiveVaultTab] = useState<'vocabulary' | 'collocations'>('vocabulary');
+  const [ctrlHistory, setCtrlHistory] = useState<{ score: number; topic: string; date: string }[]>([]);
 
   // Computed Logic
   const errorStats = useMemo(() => {
@@ -628,7 +630,29 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
   }, []);
 
   useEffect(() => {
-    if (isActive) refreshData();
+    if (!isActive) return;
+    refreshData();
+    // 从 Supabase 加载 CTRL 审辨信度历史
+    try {
+      const saved = localStorage.getItem('cet_student_user');
+      if (saved) {
+        const user = JSON.parse(saved);
+        if (user?.id) {
+          getThinkingProcessByUser(user.id).then(({ data }) => {
+            if (!data) return;
+            const scored = data
+              .filter((p: any) => p.ctrl_score?.total != null)
+              .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+              .map((p: any) => ({
+                score: p.ctrl_score.total,
+                topic: p.topic || '',
+                date: p.ctrl_score.analyzedAt || p.created_at,
+              }));
+            setCtrlHistory(scored);
+          }).catch(() => { /* 静默处理，不影响现有功能 */ });
+        }
+      }
+    } catch { /* ignore */ }
   }, [isActive, refreshData]);
 
   useEffect(() => {
@@ -790,6 +814,85 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
               </div>
             </div>
           </div>
+
+          {/* 2.5 成长对比 + 审辨信度趋势 */}
+          {(essayHistory.length >= 2 || ctrlHistory.length >= 2) && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+
+              {/* 首次 vs 最新对比卡 */}
+              {essayHistory.length >= 2 && (() => {
+                const firstScore = (essayHistory[0].data as EssayHistoryData)?.result?.totalScore ?? 0;
+                const latestScore = (essayHistory[essayHistory.length - 1].data as EssayHistoryData)?.result?.totalScore ?? 0;
+                const delta = +(latestScore - firstScore).toFixed(1);
+                const improved = delta > 0;
+                const stable = delta === 0;
+                return (
+                  <div className={`rounded-2xl p-5 border shadow-sm flex items-center gap-5 ${improved ? 'bg-emerald-50 border-emerald-200' : stable ? 'bg-slate-50 border-slate-200' : 'bg-rose-50 border-rose-200'}`}>
+                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-3xl flex-shrink-0 ${improved ? 'bg-emerald-100' : stable ? 'bg-slate-100' : 'bg-rose-100'}`}>
+                      {improved ? '🚀' : stable ? '➡️' : '📉'}
+                    </div>
+                    <div>
+                      <p className={`text-xs font-bold uppercase tracking-wider mb-1 ${improved ? 'text-emerald-600' : stable ? 'text-slate-500' : 'text-rose-600'}`}>
+                        写作成长对比
+                      </p>
+                      <p className={`text-base font-bold ${improved ? 'text-emerald-800' : stable ? 'text-slate-700' : 'text-rose-800'}`}>
+                        你的写作分数从 <span className="text-xl font-serif">{firstScore}</span> {improved ? '提升到' : stable ? '保持在' : '变化到'} <span className="text-xl font-serif">{latestScore}</span> 分
+                      </p>
+                      <p className={`text-sm mt-0.5 ${improved ? 'text-emerald-600' : stable ? 'text-slate-500' : 'text-rose-600'}`}>
+                        {improved ? `↑ 进步了 +${delta} 分，共完成 ${essayHistory.length} 次批改` : stable ? `→ 保持稳定，共完成 ${essayHistory.length} 次批改` : `↓ 差距 ${delta} 分，继续加油！共完成 ${essayHistory.length} 次`}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* CTRL 审辨信度趋势 */}
+              {ctrlHistory.length >= 2 && (
+                <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="w-8 h-8 rounded-lg bg-purple-100 text-purple-800 flex items-center justify-center text-lg">🔍</div>
+                    <div>
+                      <h3 className="font-bold text-slate-800 text-sm">审辨信度趋势</h3>
+                      <p className="text-[10px] text-slate-400 uppercase tracking-wider">CTRL Score Trend (Max 10)</p>
+                    </div>
+                  </div>
+                  <div className="flex items-end gap-1.5 h-20">
+                    {ctrlHistory.slice(-6).map((item, i, arr) => {
+                      const pct = (item.score / 10) * 100;
+                      const isLatest = i === arr.length - 1;
+                      return (
+                        <div key={i} className="flex-1 flex flex-col items-center gap-1 group relative">
+                          <span className="text-[10px] font-bold text-slate-500">{item.score.toFixed(1)}</span>
+                          <div
+                            className={`w-full rounded-t-md transition-all ${isLatest ? 'bg-purple-500' : 'bg-purple-200'}`}
+                            style={{ height: `${Math.max(pct * 0.56, 4)}px` }}
+                          />
+                          {/* 悬停 tooltip */}
+                          <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] rounded px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10 pointer-events-none">
+                            {item.topic.slice(0, 15)}{item.topic.length > 15 ? '…' : ''}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="flex justify-between mt-2">
+                    <span className="text-[10px] text-slate-400">第1次</span>
+                    <span className="text-[10px] text-slate-400">最近</span>
+                  </div>
+                  {(() => {
+                    const first = ctrlHistory[0].score;
+                    const latest = ctrlHistory[ctrlHistory.length - 1].score;
+                    const d = +(latest - first).toFixed(1);
+                    return (
+                      <p className={`text-xs font-bold mt-2 text-center ${d > 0 ? 'text-purple-600' : d < 0 ? 'text-rose-500' : 'text-slate-500'}`}>
+                        审辨信度：{first.toFixed(1)} → {latest.toFixed(1)}（{d > 0 ? `+${d}` : d}）
+                      </p>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* 3. Insight Sections */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
