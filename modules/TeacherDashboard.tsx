@@ -145,6 +145,82 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
         };
     }, [selectedClass, students, essays, drills, scaffolds, thinkingProcesses, usageLogs]);
 
+    // ── CSV 导出工具 ──────────────────────────────
+    const downloadCSV = (rows: string[][], filename: string) => {
+        const BOM = '\uFEFF'; // Excel 正确显示中文
+        const csv = BOM + rows.map(r =>
+            r.map(cell => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(',')
+        ).join('\r\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename; a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    // 导出①：学生学习汇总（当前班级筛选）
+    const exportStudentSummary = () => {
+        const studentMap: Record<string, any> = {};
+        filtered.students.forEach((s: any) => { studentMap[s.id] = s; });
+
+        const rows: string[][] = [
+            ['姓名', '学号', '班级', '作文批改次数', '平均分', '最高分', '最低分', '句子特训次数', '思维训练次数', '审辨信度均分'],
+        ];
+
+        filtered.students.forEach((s: any) => {
+            const sEssays = filtered.essays.filter((e: any) => e.user_id === s.id);
+            const sDrills = filtered.drills.filter((d: any) => d.user_id === s.id);
+            const sProcesses = filtered.thinkingProcesses.filter((t: any) => t.user_id === s.id);
+            const scores = sEssays.map((e: any) => e.total_score || 0);
+            const avg = scores.length > 0 ? (scores.reduce((a: number, b: number) => a + b, 0) / scores.length).toFixed(1) : '';
+            const max = scores.length > 0 ? Math.max(...scores) : '';
+            const min = scores.length > 0 ? Math.min(...scores) : '';
+            const ctrlScores = sProcesses.filter((t: any) => t.ctrl_score?.total != null).map((t: any) => t.ctrl_score.total);
+            const ctrlAvg = ctrlScores.length > 0 ? (ctrlScores.reduce((a: number, b: number) => a + b, 0) / ctrlScores.length).toFixed(1) : '';
+            rows.push([s.name, s.student_id, s.class_name || '', String(sEssays.length), String(avg), String(max), String(min), String(sDrills.length), String(sProcesses.length), String(ctrlAvg)]);
+        });
+
+        const label = selectedClass === 'all' ? '全部班级' : selectedClass;
+        downloadCSV(rows, `学生学习汇总_${label}_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '')}.csv`);
+    };
+
+    // 导出②：审辨信度明细（仅已分析记录）
+    const exportCtrlScores = () => {
+        const studentMap: Record<string, any> = {};
+        filtered.students.forEach((s: any) => { studentMap[s.id] = s; });
+
+        const rows: string[][] = [
+            ['姓名', '学号', '班级', '写作题目', '完成状态', '观点一致性', '论证递进性', '语言自主性', '观点拓展度', '审辨信度总分', '分析时间', '观点一致性评语', '论证递进性评语', '语言自主性评语', '观点拓展度评语', '总体评语'],
+        ];
+
+        filtered.thinkingProcesses
+            .filter((t: any) => t.ctrl_score?.total != null)
+            .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+            .forEach((t: any) => {
+                const s = studentMap[t.user_id] || {};
+                const cs = t.ctrl_score;
+                rows.push([
+                    s.name || '', s.student_id || '', s.class_name || '',
+                    t.topic || '', t.status || '',
+                    String(cs.opinionConsistency ?? ''), String(cs.argumentProgression ?? ''),
+                    String(cs.linguisticAutonomy ?? ''), String(cs.thoughtExpansion ?? ''),
+                    String(cs.total ?? ''),
+                    cs.analyzedAt ? new Date(cs.analyzedAt).toLocaleString('zh-CN') : '',
+                    cs.explanations?.opinionConsistency || '',
+                    cs.explanations?.argumentProgression || '',
+                    cs.explanations?.linguisticAutonomy || '',
+                    cs.explanations?.thoughtExpansion || '',
+                    cs.overallComment || '',
+                ]);
+            });
+
+        if (rows.length === 1) { alert('当前筛选范围内暂无已分析的审辨信度记录'); return; }
+        const label = selectedClass === 'all' ? '全部班级' : selectedClass;
+        downloadCSV(rows, `审辨信度明细_${label}_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '')}.csv`);
+    };
+
+    const [showExportMenu, setShowExportMenu] = useState(false);
+
     const tabs: { key: TeacherTab; label: string; icon: string }[] = [
         { key: 'overview', label: '教学概览', icon: '📊' },
         { key: 'analytics', label: '学情分析', icon: '📈' },
@@ -238,7 +314,35 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                             </span>
                         </>
                     )}
-                    <div className="ml-auto flex items-center gap-1.5 flex-wrap justify-end">
+                    <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
+                        {/* 导出按钮 */}
+                        <div className="relative">
+                            <button
+                                onClick={() => setShowExportMenu(v => !v)}
+                                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-all shadow-sm"
+                            >
+                                📥 导出数据
+                            </button>
+                            {showExportMenu && (
+                                <>
+                                    <div className="fixed inset-0 z-10" onClick={() => setShowExportMenu(false)} />
+                                    <div className="absolute right-0 top-8 z-20 bg-white rounded-xl shadow-lg border border-slate-200 py-1 min-w-[160px]">
+                                        <button
+                                            onClick={() => { exportStudentSummary(); setShowExportMenu(false); }}
+                                            className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 font-medium"
+                                        >
+                                            👥 学生学习汇总
+                                        </button>
+                                        <button
+                                            onClick={() => { exportCtrlScores(); setShowExportMenu(false); }}
+                                            className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 font-medium"
+                                        >
+                                            🔍 审辨信度明细
+                                        </button>
+                                    </div>
+                                </>
+                            )}
+                        </div>
                         <span className="text-xs text-slate-400 mr-1">筛选班级：</span>
                         <button
                             onClick={() => setSelectedClass('all')}

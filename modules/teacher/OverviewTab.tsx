@@ -139,6 +139,60 @@ const OverviewTab: React.FC<OverviewTabProps> = ({
 
     const avgScoreLabel = selectedClass === 'all' ? '全体平均分' : `${selectedClass} 均分`;
 
+    // 班级整体进步率统计
+    const progressStats = useMemo(() => {
+        if (essays.length === 0) return null;
+
+        // 按学生分组，按时间升序排列
+        const byUser: Record<string, any[]> = {};
+        essays.forEach((e: any) => {
+            if (!byUser[e.user_id]) byUser[e.user_id] = [];
+            byUser[e.user_id].push(e);
+        });
+        Object.values(byUser).forEach(arr =>
+            arr.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+        );
+
+        // 所有学生的首次与最新分数
+        const pairs = Object.values(byUser).map(arr => ({
+            first: arr[0].total_score || 0,
+            latest: arr[arr.length - 1].total_score || 0,
+            delta: (arr[arr.length - 1].total_score || 0) - (arr[0].total_score || 0),
+            hasMultiple: arr.length >= 2,
+        }));
+
+        const withMultiple = pairs.filter(p => p.hasMultiple);
+        const improvedCount = withMultiple.filter(p => p.delta > 0).length;
+        const stableCount  = withMultiple.filter(p => p.delta === 0).length;
+        const declinedCount = withMultiple.filter(p => p.delta < 0).length;
+        const improvedRate = withMultiple.length > 0
+            ? Math.round((improvedCount / withMultiple.length) * 100) : 0;
+        const avgImprovement = withMultiple.length > 0
+            ? +(withMultiple.reduce((s, p) => s + p.delta, 0) / withMultiple.length).toFixed(1) : 0;
+
+        // 均分对比
+        const firstAvg = pairs.length > 0
+            ? +(pairs.reduce((s, p) => s + p.first, 0) / pairs.length).toFixed(1) : 0;
+        const latestAvg = pairs.length > 0
+            ? +(pairs.reduce((s, p) => s + p.latest, 0) / pairs.length).toFixed(1) : 0;
+
+        return {
+            improvedCount,
+            stableCount,
+            declinedCount,
+            totalWithMultiple: withMultiple.length,
+            totalStudents: pairs.length,
+            improvedRate,
+            avgImprovement,
+            firstAvg,
+            latestAvg,
+            barData: [
+                { label: '首次批改均分', score: firstAvg, fill: '#94a3b8' },
+                { label: '最新批改均分', score: latestAvg, fill: latestAvg >= firstAvg ? '#10b981' : '#ef4444' },
+            ],
+        };
+    }, [essays]);
+
     if (isLoading) {
         return (
             <div className="flex items-center justify-center h-96">
@@ -295,6 +349,87 @@ const OverviewTab: React.FC<OverviewTabProps> = ({
                     )}
                 </div>
             </div>
+
+            {/* 班级整体进步分析 */}
+            {progressStats && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+                    {/* 进步率统计 */}
+                    <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                        <h3 className="font-serif font-bold text-lg text-slate-800 mb-1">📈 班级整体进步率</h3>
+                        <p className="text-xs text-slate-400 mb-5">
+                            统计有 2 篇及以上作文的学生（共 {progressStats.totalWithMultiple} 人），首次 vs 最近一篇得分变化
+                        </p>
+
+                        {progressStats.totalWithMultiple === 0 ? (
+                            <div className="text-slate-400 text-center py-8 text-sm">暂无多次批改数据</div>
+                        ) : (
+                            <>
+                                {/* 三格数字统计 */}
+                                <div className="grid grid-cols-3 gap-3 mb-6">
+                                    <div className="text-center p-3 bg-emerald-50 rounded-xl border border-emerald-100">
+                                        <div className="text-2xl font-bold text-emerald-600 font-serif">{progressStats.improvedCount}</div>
+                                        <div className="text-xs text-emerald-600 mt-0.5">进步 ↑</div>
+                                    </div>
+                                    <div className="text-center p-3 bg-slate-50 rounded-xl border border-slate-100">
+                                        <div className="text-2xl font-bold text-slate-500 font-serif">{progressStats.stableCount}</div>
+                                        <div className="text-xs text-slate-500 mt-0.5">持平 →</div>
+                                    </div>
+                                    <div className="text-center p-3 bg-rose-50 rounded-xl border border-rose-100">
+                                        <div className="text-2xl font-bold text-rose-500 font-serif">{progressStats.declinedCount}</div>
+                                        <div className="text-xs text-rose-500 mt-0.5">下降 ↓</div>
+                                    </div>
+                                </div>
+
+                                {/* 进步率 + 平均提升 */}
+                                <div className="flex items-center justify-around pt-4 border-t border-slate-100">
+                                    <div className="text-center">
+                                        <div className="text-3xl font-bold font-serif text-emerald-600">{progressStats.improvedRate}%</div>
+                                        <div className="text-xs text-slate-500 mt-0.5">进步率</div>
+                                    </div>
+                                    <div className="w-px h-10 bg-slate-200" />
+                                    <div className="text-center">
+                                        <div className={`text-3xl font-bold font-serif ${progressStats.avgImprovement > 0 ? 'text-emerald-600' : progressStats.avgImprovement < 0 ? 'text-rose-500' : 'text-slate-400'}`}>
+                                            {progressStats.avgImprovement > 0 ? '+' : ''}{progressStats.avgImprovement}
+                                        </div>
+                                        <div className="text-xs text-slate-500 mt-0.5">平均提升分值</div>
+                                    </div>
+                                </div>
+                            </>
+                        )}
+                    </div>
+
+                    {/* 首次 vs 最新均分对比 */}
+                    <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                        <h3 className="font-serif font-bold text-lg text-slate-800 mb-1">🆚 首次 vs 最新均分对比</h3>
+                        <p className="text-xs text-slate-400 mb-5">
+                            全体 {progressStats.totalStudents} 名学生，首次批改均分 vs 最近一篇均分（满分 15 分）
+                        </p>
+                        <ResponsiveContainer width="100%" height={200}>
+                            <BarChart data={progressStats.barData} margin={{ top: 16, right: 16, left: 0, bottom: 0 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                                <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#64748b' }} />
+                                <YAxis domain={[0, 15]} tick={{ fontSize: 11, fill: '#64748b' }} />
+                                <Tooltip
+                                    contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0', fontSize: '13px' }}
+                                    formatter={(v: any) => [`${v} 分`, '']}
+                                />
+                                <Bar dataKey="score" radius={[10, 10, 0, 0]} maxBarSize={80}>
+                                    {progressStats.barData.map((entry, i) => (
+                                        <Cell key={i} fill={entry.fill} />
+                                    ))}
+                                    <LabelList dataKey="score" position="top" style={{ fontSize: 14, fontWeight: 700, fill: '#475569' }} />
+                                </Bar>
+                            </BarChart>
+                        </ResponsiveContainer>
+                        <p className="text-[11px] text-slate-400 text-center mt-2">
+                            {progressStats.latestAvg >= progressStats.firstAvg
+                                ? `全班均分提升 +${(progressStats.latestAvg - progressStats.firstAvg).toFixed(1)} 分`
+                                : `全班均分下降 ${(progressStats.latestAvg - progressStats.firstAvg).toFixed(1)} 分`}
+                        </p>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
