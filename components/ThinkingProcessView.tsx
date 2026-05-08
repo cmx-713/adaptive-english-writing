@@ -1,9 +1,160 @@
 
 import React, { useState } from 'react';
+import { analyzeCtrlScore, CtrlScore } from '../services/geminiService';
+import { saveCtrlScore } from '../services/supabaseDataService';
 
 interface ThinkingProcessViewProps {
     processes: any[];
 }
+
+const CTRL_DIMS = [
+    { key: 'opinionConsistency',  label: '观点一致性', weight: 25, color: '#3b82f6' },
+    { key: 'argumentProgression', label: '论证递进性', weight: 30, color: '#10b981' },
+    { key: 'linguisticAutonomy',  label: '语言自主性', weight: 25, color: '#f59e0b' },
+    { key: 'thoughtExpansion',    label: '观点拓展度', weight: 20, color: '#8b5cf6' },
+] as const;
+
+const CtrlScorePanel: React.FC<{ processId: string; existingScore: CtrlScore | null; processData: any }> = ({ processId, existingScore, processData }) => {
+    const [score, setScore] = useState<CtrlScore | null>(existingScore);
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [error, setError] = useState('');
+
+    const handleAnalyze = async () => {
+        setIsAnalyzing(true);
+        setError('');
+        try {
+            const result = await analyzeCtrlScore({
+                topic: processData.topic,
+                inspirationCards: processData.inspiration_cards || [],
+                userIdeas: processData.user_ideas || {},
+                validationResults: processData.validation_results || {},
+                personalizedExpansions: processData.personalized_expansions || {},
+                dimensionDrafts: processData.dimension_drafts || {},
+                assembledEssay: processData.assembled_essay,
+            });
+            setScore(result);
+            await saveCtrlScore(processId, result);
+        } catch (e: any) {
+            setError(e?.message || '分析失败，请重试');
+        } finally {
+            setIsAnalyzing(false);
+        }
+    };
+
+    const totalColor = (t: number) =>
+        t >= 8 ? '#10b981' : t >= 6 ? '#3b82f6' : t >= 4 ? '#f59e0b' : '#ef4444';
+
+    if (!score) {
+        return (
+            <div className="mt-3 border border-dashed border-slate-200 rounded-xl p-4 bg-slate-50/50">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <p className="text-sm font-bold text-slate-600">审辨信度分析</p>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                            基于学生三阶段完整思维过程，AI 评估批判性思维表现
+                        </p>
+                    </div>
+                    <button
+                        onClick={handleAnalyze}
+                        disabled={isAnalyzing}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-sm ${isAnalyzing
+                            ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                            : 'bg-[#1e2d4a] text-white hover:bg-[#162240] hover:-translate-y-0.5'
+                        }`}
+                    >
+                        {isAnalyzing ? (
+                            <>
+                                <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                </svg>
+                                AI 分析中...
+                            </>
+                        ) : '🔍 分析审辨信度'}
+                    </button>
+                </div>
+                {error && <p className="text-xs text-rose-500 mt-2">{error}</p>}
+            </div>
+        );
+    }
+
+    return (
+        <div className="mt-3 border border-slate-200 rounded-xl overflow-hidden bg-white">
+            {/* 标题栏 + 总分 */}
+            <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-slate-50 to-white border-b border-slate-100">
+                <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold text-slate-700">🔍 审辨信度</span>
+                    <span className="text-[10px] text-slate-400">
+                        {score.analyzedAt ? new Date(score.analyzedAt).toLocaleDateString('zh-CN') : ''}
+                    </span>
+                </div>
+                <div className="flex items-center gap-3">
+                    <div className="text-right">
+                        <div className="text-2xl font-bold font-serif" style={{ color: totalColor(score.total) }}>
+                            {score.total.toFixed(1)}
+                        </div>
+                        <div className="text-[10px] text-slate-400">/ 10</div>
+                    </div>
+                    <button
+                        onClick={handleAnalyze}
+                        disabled={isAnalyzing}
+                        className="text-xs text-slate-400 hover:text-slate-600 underline"
+                    >
+                        {isAnalyzing ? '分析中...' : '重新分析'}
+                    </button>
+                </div>
+            </div>
+
+            {/* 四维评分 */}
+            <div className="p-4 space-y-3">
+                {CTRL_DIMS.map(({ key, label, weight, color }) => {
+                    const val = score[key as keyof CtrlScore] as number;
+                    const expl = score.explanations?.[key as keyof typeof score.explanations] || '';
+                    return (
+                        <div key={key}>
+                            <div className="flex items-center justify-between mb-1">
+                                <div className="flex items-center gap-1.5">
+                                    <span className="text-xs font-bold text-slate-700">{label}</span>
+                                    <span className="text-[10px] text-slate-400">×{weight}%</span>
+                                </div>
+                                <span className="text-sm font-bold" style={{ color }}>
+                                    {typeof val === 'number' ? val.toFixed(1) : '—'}
+                                </span>
+                            </div>
+                            <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden mb-1.5">
+                                <div
+                                    className="h-full rounded-full transition-all duration-700"
+                                    style={{ width: `${((val || 0) / 10) * 100}%`, backgroundColor: color }}
+                                />
+                            </div>
+                            {expl && <p className="text-[11px] text-slate-500 leading-relaxed">{expl}</p>}
+                        </div>
+                    );
+                })}
+            </div>
+
+            {/* 总体评语 */}
+            {score.overallComment && (
+                <div className="px-4 pb-4">
+                    <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">总体评语</p>
+                        <p className="text-xs text-slate-600 leading-relaxed">{score.overallComment}</p>
+                    </div>
+                </div>
+            )}
+
+            {/* 公式说明 */}
+            <div className="px-4 pb-3">
+                        <p className="text-[10px] text-slate-300 text-center">
+                            审辨信度 = 观点一致性×25% + 论证递进性×30% + 语言自主性×25% + 观点拓展度×20%
+                        </p>
+                        <p className="text-[10px] text-slate-300 text-center mt-0.5">
+                            论证递进性考察：①中文观点→英语段落的展开质量；②多段落在终稿中的结构整合（过渡/引言/结论）
+                        </p>
+            </div>
+        </div>
+    );
+};
 
 const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes }) => {
     const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -84,6 +235,12 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes }) 
                         {/* Expanded Content */}
                         {isExpanded && (
                             <div className="border-t border-slate-100 px-4 py-4 space-y-4 animate-fade-in-up">
+                                {/* 审辨信度面板 */}
+                                <CtrlScorePanel
+                                    processId={proc.id}
+                                    existingScore={proc.ctrl_score || null}
+                                    processData={proc}
+                                />
                                 {/* 时间线 */}
                                 <div className="relative">
                                     {/* 竖线 */}

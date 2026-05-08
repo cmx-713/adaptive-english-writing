@@ -691,6 +691,23 @@ export const getAllThinkingProcesses = async (limit: number = 200) => {
 }
 
 /**
+ * 保存审辨信度评分结果到 wc_thinking_process
+ */
+export const saveCtrlScore = async (processId: string, ctrlScore: object) => {
+  try {
+    const { error } = await supabase
+      .from('wc_thinking_process')
+      .update({ ctrl_score: ctrlScore })
+      .eq('id', processId)
+    if (error) console.error('[Supabase] 保存审辨信度失败:', error)
+    return { error }
+  } catch (err) {
+    console.error('[Supabase] 保存审辨信度异常:', err)
+    return { error: err }
+  }
+}
+
+/**
  * 获取指定学生的思维过程记录
  */
 export const getThinkingProcessByUser = async (userId: string) => {

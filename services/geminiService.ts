@@ -1221,3 +1221,175 @@ export const evaluateRetrainingAttempt = async (
   const res = await callAI(systemPrompt, "Evaluate Answer", schema);
   return safeJsonParse(res, 'evaluateRetrainingAttempt');
 };
+
+// ─────────────────────────────────────────────
+// 审辨信度（CTRL Score）分析
+// ─────────────────────────────────────────────
+
+export interface CtrlScore {
+  opinionConsistency: number;     // 观点一致性 0-10
+  argumentProgression: number;   // 论证递进性 0-10
+  linguisticAutonomy: number;    // 语言自主性 0-10
+  thoughtExpansion: number;      // 观点拓展度 0-10
+  total: number;                 // 加权总分
+  explanations: {
+    opinionConsistency: string;
+    argumentProgression: string;
+    linguisticAutonomy: string;
+    thoughtExpansion: string;
+  };
+  overallComment: string;
+  analyzedAt: string;
+}
+
+export const analyzeCtrlScore = async (processData: {
+  topic: string;
+  inspirationCards: any[];
+  userIdeas: Record<string, string>;
+  validationResults: Record<string, any>;
+  personalizedExpansions: Record<string, string[]>;
+  dimensionDrafts: Record<string, any>;
+  assembledEssay: any;
+}): Promise<CtrlScore> => {
+
+  const { topic, inspirationCards, userIdeas, validationResults, personalizedExpansions, dimensionDrafts, assembledEssay } = processData;
+
+  // 组织 Phase 1 数据
+  const phase1Text = inspirationCards.map((card: any) => {
+    const idea = userIdeas[card.id] || '（未填写）';
+    const validation = validationResults[card.id];
+    const expansion = personalizedExpansions[card.id] || [];
+    return [
+      `【维度：${card.dimension}】`,
+      `  学生原始观点：${idea}`,
+      validation ? `  苏格拉底反馈：${validation.analysis || ''}` : '',
+      expansion.length > 0 ? `  AI个性化拓展建议：\n    - ${expansion.join('\n    - ')}` : '',
+    ].filter(Boolean).join('\n');
+  }).join('\n\n');
+
+  // 组织 Phase 2 数据
+  const phase2Text = Object.values(dimensionDrafts).map((d: any) => {
+    return `【维度：${d.dimension}】\n  草稿：${d.draft || '（未写）'}`;
+  }).join('\n\n');
+
+  // 组织 Phase 3 数据
+  let phase3Text = '（未完成）';
+  if (assembledEssay) {
+    const parts: string[] = [];
+    if (assembledEssay.introduction) parts.push(`引言：${assembledEssay.introduction}`);
+    if (assembledEssay.bodyParagraphs) {
+      assembledEssay.bodyParagraphs.forEach((p: any) => {
+        parts.push(`${p.dimension}：${p.draft}`);
+      });
+    }
+    if (assembledEssay.conclusion) parts.push(`结论：${assembledEssay.conclusion}`);
+    phase3Text = parts.join('\n\n');
+  }
+
+  const schema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      opinionConsistency: { type: Type.NUMBER, description: '观点一致性得分 0-10' },
+      argumentProgression: { type: Type.NUMBER, description: '论证递进性得分 0-10' },
+      linguisticAutonomy: { type: Type.NUMBER, description: '语言自主性得分 0-10' },
+      thoughtExpansion: { type: Type.NUMBER, description: '观点拓展度得分 0-10' },
+      explanations: {
+        type: Type.OBJECT,
+        properties: {
+          opinionConsistency: { type: Type.STRING, description: '观点一致性评分理由（2-3句）' },
+          argumentProgression: { type: Type.STRING, description: '论证递进性评分理由（2-3句）' },
+          linguisticAutonomy: { type: Type.STRING, description: '语言自主性评分理由（2-3句）' },
+          thoughtExpansion: { type: Type.STRING, description: '观点拓展度评分理由（2-3句）' },
+        },
+        required: ['opinionConsistency', 'argumentProgression', 'linguisticAutonomy', 'thoughtExpansion'],
+      },
+      overallComment: { type: Type.STRING, description: '总体评语（3-4句，结合四个维度综合评价学生的审辨思维表现）' },
+    },
+    required: ['opinionConsistency', 'argumentProgression', 'linguisticAutonomy', 'thoughtExpansion', 'explanations', 'overallComment'],
+  };
+
+  const systemPrompt = `你是一位大学英语写作研究专家，擅长评估学生的审辨性思维在写作过程中的体现。
+
+请根据以下学生的完整写作思维过程，按照"审辨信度"四维评分体系进行评分。
+
+═══ 写作题目 ═══
+${topic}
+
+═══ Phase 1：观点构思阶段 ═══
+${phase1Text}
+
+═══ Phase 2：语言支架与草稿阶段 ═══
+${phase2Text || '（未到达该阶段）'}
+
+═══ Phase 3：组合成文（终稿）═══
+${phase3Text}
+
+═══ 评分维度说明 ═══
+
+1. 【观点一致性】(0-10分)
+重要说明：
+  · 学生只需完成至少2个维度，缺少某个维度不扣分。
+  · 评分范围仅限于 Phase 1 中学生实际填写了观点的维度；未填写的维度（如"个人维度未填写"）不计入评估，也不构成扣分依据。
+  · 内容"一致"是预期结果，"丢失"或"偏离"才是问题所在。
+
+评分依据：在 Phase 1 已填写观点的维度中，核心论点（立场/论据）是否在终稿对应段落中被完整保留，有无被省略、替换或严重偏离。
+
+- 9-10分：所有已填写维度的核心论点在终稿中完整呈现，立场清晰一致
+- 6-8分：已填写维度大部分论点保留完整，个别维度有轻微简化但核心立场未变
+- 3-5分：已填写维度中有1个以上的核心论点在终稿中被省略或替换为无关内容
+- 0-2分：已填写维度的多数核心论点与终稿严重不符，基本无法对应
+
+2. 【论证递进性】(0-10分)
+重要说明：Phase 3 的主体内容来自 Phase 2 草稿，这是正常预期，不扣分。
+评分依据分两段：
+  ① Phase 1→Phase 2：学生是否将中文原始观点有效转化为英语段落（不是翻译，而是论据展开）
+  ② Phase 2→Phase 3：多个草稿段落在终稿中是否有结构性整合——包括段落间过渡句、Introduction 是否引出整体论点、Conclusion 是否综合各维度而非简单重复
+
+- 9-10分：中文观点被充分展开为英语论证段落（①）；终稿有流畅的段落间过渡，Introduction/Conclusion 体现整体论证框架，整体呈现为连贯论文而非拼接（②）
+- 6-8分：语言转化基本完成（①）；终稿有一定整合，但过渡句不足或 Introduction/Conclusion 较为套路化（②）
+- 3-5分：语言转化勉强完成，草稿质量有限（①）；终稿基本是直接拼接草稿，段落间缺乏过渡，引言/结论与正文游离（②）
+- 0-2分：Phase 2 草稿未能有效承接 Phase 1 的观点（①）；终稿呈纯拼凑状态，各段落独立存在，无整体论证感（②）
+
+3. 【语言自主性】(0-10分)
+评分依据：三个阶段的语言水平是否保持学生真实水平的一致性，无AI痕迹突变。
+- 9-10分：语言风格始终一致，自然体现学生真实水平
+- 6-8分：整体一致，偶有少量明显借用AI句式
+- 3-5分：终稿中有较多AI化表达，与学生草稿风格落差明显
+- 0-2分：终稿语言与原始观点风格完全不符，疑似大量AI替换
+
+4. 【观点拓展度】(0-10分)
+评分依据：终稿是否体现了对AI拓展建议（苏格拉底反馈、个性化思路拓展）的实质性借鉴与内化。
+- 9-10分：主动吸收AI建议，终稿在至少2个维度上出现实质性深化
+- 6-8分：部分吸收AI建议，终稿在1个维度上有可见深化
+- 4-5分：意识到AI建议的存在，但终稿未有效转化为内容增量
+- 0-3分：完全无视AI建议，终稿与原始观点的深度和广度无任何变化
+
+请以JSON格式输出评分，所有解释必须用中文，每项理由2-3句，结合具体文本依据。`;
+
+  const raw = await callAI(systemPrompt, '审辨信度分析', schema);
+  const parsed = safeJsonParse(raw, 'analyzeCtrlScore');
+
+  // 确保分数在合理范围内
+  const clamp = (v: number) => Math.min(10, Math.max(0, Math.round(v * 10) / 10));
+  const oc = clamp(parsed.opinionConsistency ?? 5);
+  const ap = clamp(parsed.argumentProgression ?? 5);
+  const la = clamp(parsed.linguisticAutonomy ?? 5);
+  const te = clamp(parsed.thoughtExpansion ?? 5);
+  const total = Math.round((oc * 0.25 + ap * 0.30 + la * 0.25 + te * 0.20) * 10) / 10;
+
+  return {
+    opinionConsistency: oc,
+    argumentProgression: ap,
+    linguisticAutonomy: la,
+    thoughtExpansion: te,
+    total,
+    explanations: parsed.explanations || {
+      opinionConsistency: '',
+      argumentProgression: '',
+      linguisticAutonomy: '',
+      thoughtExpansion: '',
+    },
+    overallComment: parsed.overallComment || '',
+    analyzedAt: new Date().toISOString(),
+  };
+};
