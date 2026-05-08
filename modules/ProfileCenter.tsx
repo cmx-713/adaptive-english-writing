@@ -816,7 +816,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
           </div>
 
           {/* 2.5 成长对比 + 审辨信度趋势 */}
-          {(essayHistory.length >= 2 || ctrlHistory.length >= 2) && (
+          {(essayHistory.length >= 2 || ctrlHistory.length >= 1) && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
 
               {/* 首次 vs 最新对比卡 */}
@@ -846,8 +846,8 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                 );
               })()}
 
-              {/* CTRL 审辨信度趋势 */}
-              {ctrlHistory.length >= 2 && (
+              {/* CTRL 审辨信度趋势 / 评分卡 */}
+              {ctrlHistory.length >= 1 && (
                 <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
                   <div className="flex items-center gap-2 mb-4">
                     <div className="w-8 h-8 rounded-lg bg-purple-100 text-purple-800 flex items-center justify-center text-lg">🔍</div>
@@ -856,39 +856,50 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                       <p className="text-[10px] text-slate-400 uppercase tracking-wider">CTRL Score Trend (Max 10)</p>
                     </div>
                   </div>
-                  <div className="flex items-end gap-1.5 h-20">
-                    {ctrlHistory.slice(-6).map((item, i, arr) => {
-                      const pct = (item.score / 10) * 100;
-                      const isLatest = i === arr.length - 1;
-                      return (
-                        <div key={i} className="flex-1 flex flex-col items-center gap-1 group relative">
-                          <span className="text-[10px] font-bold text-slate-500">{item.score.toFixed(1)}</span>
-                          <div
-                            className={`w-full rounded-t-md transition-all ${isLatest ? 'bg-purple-500' : 'bg-purple-200'}`}
-                            style={{ height: `${Math.max(pct * 0.56, 4)}px` }}
-                          />
-                          {/* 悬停 tooltip */}
-                          <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] rounded px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10 pointer-events-none">
-                            {item.topic.slice(0, 15)}{item.topic.length > 15 ? '…' : ''}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="flex justify-between mt-2">
-                    <span className="text-[10px] text-slate-400">第1次</span>
-                    <span className="text-[10px] text-slate-400">最近</span>
-                  </div>
-                  {(() => {
-                    const first = ctrlHistory[0].score;
-                    const latest = ctrlHistory[ctrlHistory.length - 1].score;
-                    const d = +(latest - first).toFixed(1);
-                    return (
-                      <p className={`text-xs font-bold mt-2 text-center ${d > 0 ? 'text-purple-600' : d < 0 ? 'text-rose-500' : 'text-slate-500'}`}>
-                        审辨信度：{first.toFixed(1)} → {latest.toFixed(1)}（{d > 0 ? `+${d}` : d}）
-                      </p>
-                    );
-                  })()}
+                  {ctrlHistory.length === 1 ? (
+                    /* 仅1次：只显示评分卡 */
+                    <div className="flex flex-col items-center justify-center h-24 gap-2">
+                      <div className="text-4xl font-bold font-serif text-purple-600">{ctrlHistory[0].score.toFixed(1)}</div>
+                      <div className="text-xs text-slate-400">/ 10 · {ctrlHistory[0].topic.slice(0, 20)}{ctrlHistory[0].topic.length > 20 ? '…' : ''}</div>
+                      <div className="text-[10px] text-slate-300">完成更多思维训练后将显示成长趋势</div>
+                    </div>
+                  ) : (
+                    /* ≥2次：显示趋势图 */
+                    <>
+                      <div className="flex items-end gap-1.5 h-20">
+                        {ctrlHistory.slice(-6).map((item, i, arr) => {
+                          const pct = (item.score / 10) * 100;
+                          const isLatest = i === arr.length - 1;
+                          return (
+                            <div key={i} className="flex-1 flex flex-col items-center gap-1 group relative">
+                              <span className="text-[10px] font-bold text-slate-500">{item.score.toFixed(1)}</span>
+                              <div
+                                className={`w-full rounded-t-md transition-all ${isLatest ? 'bg-purple-500' : 'bg-purple-200'}`}
+                                style={{ height: `${Math.max(pct * 0.56, 4)}px` }}
+                              />
+                              <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] rounded px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10 pointer-events-none">
+                                {item.topic.slice(0, 15)}{item.topic.length > 15 ? '…' : ''}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="flex justify-between mt-2">
+                        <span className="text-[10px] text-slate-400">第1次</span>
+                        <span className="text-[10px] text-slate-400">最近</span>
+                      </div>
+                      {(() => {
+                        const first = ctrlHistory[0].score;
+                        const latest = ctrlHistory[ctrlHistory.length - 1].score;
+                        const d = +(latest - first).toFixed(1);
+                        return (
+                          <p className={`text-xs font-bold mt-2 text-center ${d > 0 ? 'text-purple-600' : d < 0 ? 'text-rose-500' : 'text-slate-500'}`}>
+                            审辨信度：{first.toFixed(1)} → {latest.toFixed(1)}（{d > 0 ? `+${d}` : d}）
+                          </p>
+                        );
+                      })()}
+                    </>
+                  )}
                 </div>
               )}
             </div>

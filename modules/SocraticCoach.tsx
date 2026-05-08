@@ -4,9 +4,9 @@ import InputSection from '../components/InputSection';
 import PhaseOneCards from '../components/PhaseOneCards';
 import ResultsDisplay from '../components/ResultsDisplay';
 import HistoryModal from '../components/HistoryModal';
-import { fetchInspirationCards, fetchLanguageScaffolds, generateEssayIntroConclusion } from '../services/geminiService';
+import { fetchInspirationCards, fetchLanguageScaffolds, generateEssayIntroConclusion, analyzeCtrlScore } from '../services/geminiService';
 import { getHistory, deleteFromHistory, saveToHistory, checkIsSaved } from '../services/storageService';
-import { saveScaffoldToSupabase, saveInspirationToSupabase, updateScaffoldDraft, saveAssembledEssayToSupabase, logAgentUsage, createThinkingProcess, updateThinkingProcess } from '../services/supabaseDataService';
+import { saveScaffoldToSupabase, saveInspirationToSupabase, updateScaffoldDraft, saveAssembledEssayToSupabase, logAgentUsage, createThinkingProcess, updateThinkingProcess, saveCtrlScore } from '../services/supabaseDataService';
 import { UserInput, InspirationCard, ScaffoldContent, FlowState, HistoryItem, InspirationHistoryData, DimensionDraft } from '../types';
 import { IdeaValidationResult } from '../services/geminiService';
 
@@ -281,6 +281,20 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
         assembled_essay: { introduction: '', bodyParagraphs, conclusion: '' },
         status: 'completed'
       }).catch(() => { });
+
+      // 后台自动分析审辨信度（B方案：学生完成Phase3即触发）
+      const processId = thinkingProcessIdRef.current;
+      analyzeCtrlScore({
+        topic: currentTopic,
+        inspirationCards: cards,
+        userIdeas: step1Inputs,
+        validationResults: validationResultsRef.current,
+        personalizedExpansions,
+        dimensionDrafts,
+        assembledEssay: { introduction: '', bodyParagraphs, conclusion: '' },
+      }).then(result => {
+        saveCtrlScore(processId, { ...result, source: 'auto', reviewed: false });
+      }).catch(() => { /* 静默处理，不影响主流程 */ });
     }
   };
 

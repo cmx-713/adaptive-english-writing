@@ -140,6 +140,49 @@ export const quickSignInExternal = async (
 }
 
 /**
+ * 批量审辨信度：查询指定班级中有组合成文但尚无 ctrl_score 的思维过程记录
+ */
+export const getBatchCtrlCandidates = async (className: string) => {
+  try {
+    // Step 1: 获取该班所有学生 ID
+    const { data: students, error: stuError } = await supabase
+      .from('wc_users')
+      .select('id, name, student_id')
+      .eq('class_name', className)
+      .eq('role', 'student')
+
+    if (stuError || !students || students.length === 0) {
+      return { data: [], error: stuError }
+    }
+
+    const studentIds = students.map((s: any) => s.id)
+    const studentMap: Record<string, any> = {}
+    students.forEach((s: any) => { studentMap[s.id] = s })
+
+    // Step 2: 查询有 assembled_essay 但无 ctrl_score 的记录
+    const { data: processes, error: procError } = await supabase
+      .from('wc_thinking_process')
+      .select('id, topic, user_ideas, validation_results, personalized_expansions, dimension_drafts, assembled_essay, inspiration_cards, user_id')
+      .in('user_id', studentIds)
+      .not('assembled_essay', 'is', null)
+      .is('ctrl_score', null)
+      .order('created_at', { ascending: false })
+
+    if (procError) return { data: [], error: procError }
+
+    const result = (processes || []).map((p: any) => ({
+      ...p,
+      studentName: studentMap[p.user_id]?.name || '未知',
+      studentId: studentMap[p.user_id]?.student_id || '',
+    }))
+
+    return { data: result, error: null }
+  } catch (err) {
+    return { data: [], error: err }
+  }
+}
+
+/**
  * 教师端：查询所有外校注册用户
  */
 export const getExternalUsers = async () => {
@@ -688,6 +731,27 @@ export const getAllThinkingProcesses = async (limit: number = 200) => {
     .limit(limit)
 
   return { data, error }
+}
+
+/**
+ * 教师标记审辨信度为"已复核"
+ */
+export const markCtrlReviewed = async (processId: string) => {
+  try {
+    const { data } = await supabase
+      .from('wc_thinking_process')
+      .select('ctrl_score')
+      .eq('id', processId)
+      .single()
+    if (!data?.ctrl_score) return { error: 'no ctrl_score' }
+    const { error } = await supabase
+      .from('wc_thinking_process')
+      .update({ ctrl_score: { ...data.ctrl_score, reviewed: true } })
+      .eq('id', processId)
+    return { error }
+  } catch (err) {
+    return { error: err }
+  }
 }
 
 /**

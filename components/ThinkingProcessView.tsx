@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { analyzeCtrlScore, CtrlScore } from '../services/geminiService';
-import { saveCtrlScore } from '../services/supabaseDataService';
+import { saveCtrlScore, markCtrlReviewed } from '../services/supabaseDataService';
 
 interface ThinkingProcessViewProps {
     processes: any[];
@@ -18,6 +18,17 @@ const CtrlScorePanel: React.FC<{ processId: string; existingScore: CtrlScore | n
     const [score, setScore] = useState<CtrlScore | null>(existingScore);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [error, setError] = useState('');
+    const [isMarking, setIsMarking] = useState(false);
+
+    const source: string = (score as any)?.source || 'teacher_manual';
+    const reviewed: boolean = (score as any)?.reviewed === true;
+
+    const handleMarkReviewed = async () => {
+        setIsMarking(true);
+        await markCtrlReviewed(processId);
+        setScore(prev => prev ? { ...prev, reviewed: true } as any : prev);
+        setIsMarking(false);
+    };
 
     const handleAnalyze = async () => {
         setIsAnalyzing(true);
@@ -82,19 +93,39 @@ const CtrlScorePanel: React.FC<{ processId: string; existingScore: CtrlScore | n
         <div className="mt-3 border border-slate-200 rounded-xl overflow-hidden bg-white">
             {/* 标题栏 + 总分 */}
             <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-slate-50 to-white border-b border-slate-100">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-bold text-slate-700">🔍 审辨信度</span>
+                    {/* 来源标签 */}
+                    {reviewed ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200">
+                            ✓ 教师已复核
+                        </span>
+                    ) : source === 'auto' ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">
+                            🤖 自动生成
+                        </span>
+                    ) : null}
                     <span className="text-[10px] text-slate-400">
                         {score.analyzedAt ? new Date(score.analyzedAt).toLocaleDateString('zh-CN') : ''}
                     </span>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
                     <div className="text-right">
                         <div className="text-2xl font-bold font-serif" style={{ color: totalColor(score.total) }}>
                             {score.total.toFixed(1)}
                         </div>
                         <div className="text-[10px] text-slate-400">/ 10</div>
                     </div>
+                    {/* 标记已复核按钮（仅自动生成且未复核时显示） */}
+                    {source === 'auto' && !reviewed && (
+                        <button
+                            onClick={handleMarkReviewed}
+                            disabled={isMarking}
+                            className="text-xs px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 font-medium transition-colors disabled:opacity-50"
+                        >
+                            {isMarking ? '标记中...' : '✓ 标记已复核'}
+                        </button>
+                    )}
                     <button
                         onClick={handleAnalyze}
                         disabled={isAnalyzing}

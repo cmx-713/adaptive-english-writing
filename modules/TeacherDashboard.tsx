@@ -3,8 +3,169 @@ import { User } from '../types';
 import {
     getAllStudents, getAllEssayGrades, getAllDrillHistory,
     getAllScaffoldHistory, getAgentUsageSummary, getAllThinkingProcesses,
-    updateStudentClass, getExternalUsers,
+    updateStudentClass, getExternalUsers, getBatchCtrlCandidates, saveCtrlScore,
 } from '../services/supabaseDataService';
+import { analyzeCtrlScore } from '../services/geminiService';
+// 批量审辨信度生成 Modal
+const BatchCtrlModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+    const CLASSES = ['2024级A甲6', '2024级A乙6', '2025级A甲2', '2025级A乙2'];
+    const [selectedClass, setSelectedClass] = useState('');
+    const [candidates, setCandidates] = useState<any[]>([]);
+    const [loadingCandidates, setLoadingCandidates] = useState(false);
+    const [running, setRunning] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const [done, setDone] = useState(0);
+    const [failed, setFailed] = useState(0);
+    const [finished, setFinished] = useState(false);
+    const abortRef = useState({ cancelled: false })[0];
+
+    const handleSelectClass = async (cls: string) => {
+        setSelectedClass(cls);
+        setCandidates([]);
+        setFinished(false);
+        setProgress(0);
+        if (!cls) return;
+        setLoadingCandidates(true);
+        const { data } = await getBatchCtrlCandidates(cls);
+        setCandidates(data || []);
+        setLoadingCandidates(false);
+    };
+
+    const handleStart = async () => {
+        if (candidates.length === 0) return;
+        setRunning(true);
+        setProgress(0);
+        setDone(0);
+        setFailed(0);
+        abortRef.cancelled = false;
+
+        for (let i = 0; i < candidates.length; i++) {
+            if (abortRef.cancelled) break;
+            const rec = candidates[i];
+            try {
+                const result = await analyzeCtrlScore({
+                    topic: rec.topic || '',
+                    inspirationCards: rec.inspiration_cards || [],
+                    userIdeas: rec.user_ideas || {},
+                    validationResults: rec.validation_results || {},
+                    personalizedExpansions: rec.personalized_expansions || {},
+                    dimensionDrafts: rec.dimension_drafts || {},
+                    assembledEssay: rec.assembled_essay,
+                });
+                await saveCtrlScore(rec.id, { ...result, source: 'auto', reviewed: false });
+                setDone(d => d + 1);
+            } catch {
+                setFailed(f => f + 1);
+            }
+            setProgress(i + 1);
+            // 避免请求过于密集，每条间隔 1.5s
+            if (i < candidates.length - 1) await new Promise(r => setTimeout(r, 1500));
+        }
+        setRunning(false);
+        setFinished(true);
+    };
+
+    const handleStop = () => { abortRef.cancelled = true; };
+
+    const pct = candidates.length > 0 ? Math.round((progress / candidates.length) * 100) : 0;
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md mx-4 overflow-hidden">
+                <div className="bg-[#1e2d4a] text-white px-6 py-4 flex items-center justify-between">
+                    <div>
+                        <h2 className="font-bold text-lg">批量生成历史审辨信度</h2>
+                        <p className="text-white/60 text-xs mt-0.5">对已完成组合成文但尚未分析的记录批量生成</p>
+                    </div>
+                    <button onClick={onClose} disabled={running} className="text-white/60 hover:text-white text-xl disabled:opacity-30">✕</button>
+                </div>
+
+                <div className="p-6 space-y-5">
+                    {/* 班级选择 */}
+                    <div>
+                        <p className="text-sm font-bold text-slate-600 mb-2">选择班级</p>
+                        <div className="grid grid-cols-2 gap-2">
+                            {CLASSES.map(cls => (
+                                <button key={cls}
+                                    onClick={() => handleSelectClass(cls)}
+                                    disabled={running}
+                                    className={`py-2.5 px-3 rounded-xl text-sm font-medium border transition-all text-left ${selectedClass === cls ? 'bg-[#1e2d4a] text-white border-[#1e2d4a]' : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300'}`}>
+                                    {cls}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* 待分析记录数 */}
+                    {selectedClass && (
+                        <div className={`rounded-xl p-4 border ${loadingCandidates ? 'bg-slate-50 border-slate-200' : candidates.length > 0 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
+                            {loadingCandidates ? (
+                                <p className="text-sm text-slate-500 flex items-center gap-2">
+                                    <span className="inline-block w-4 h-4 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin" />
+                                    正在统计待分析记录...
+                                </p>
+                            ) : candidates.length > 0 ? (
+                                <p className="text-sm font-medium text-amber-800">
+                                    📋 {selectedClass} 共有 <strong>{candidates.length}</strong> 条记录待分析
+                                </p>
+                            ) : (
+                                <p className="text-sm font-medium text-emerald-700">✅ {selectedClass} 所有记录均已分析</p>
+                            )}
+                        </div>
+                    )}
+
+                    {/* 进度条 */}
+                    {(running || finished) && (
+                        <div>
+                            <div className="flex justify-between text-xs text-slate-500 mb-1.5">
+                                <span>{finished ? '分析完成' : `正在分析 ${progress} / ${candidates.length}`}</span>
+                                <span>{pct}%</span>
+                            </div>
+                            <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                                <div className={`h-full rounded-full transition-all duration-500 ${finished ? 'bg-emerald-500' : 'bg-[#1e2d4a]'}`}
+                                    style={{ width: `${pct}%` }} />
+                            </div>
+                            {finished && (
+                                <p className="text-xs text-slate-500 mt-2 text-center">
+                                    ✅ 成功 {done} 条 {failed > 0 ? `· ⚠️ 失败 ${failed} 条` : ''}
+                                </p>
+                            )}
+                        </div>
+                    )}
+
+                    {/* 操作按钮 */}
+                    <div className="flex gap-3 pt-2">
+                        {!running && !finished && (
+                            <button onClick={handleStart}
+                                disabled={candidates.length === 0 || loadingCandidates}
+                                className="flex-1 py-3 rounded-xl font-bold text-white bg-[#1e2d4a] hover:bg-[#162240] disabled:opacity-40 disabled:cursor-not-allowed transition-all">
+                                🚀 开始批量分析
+                            </button>
+                        )}
+                        {running && (
+                            <button onClick={handleStop}
+                                className="flex-1 py-3 rounded-xl font-bold text-rose-600 bg-rose-50 border border-rose-200 hover:bg-rose-100 transition-all">
+                                ⏹ 停止
+                            </button>
+                        )}
+                        {finished && (
+                            <button onClick={onClose}
+                                className="flex-1 py-3 rounded-xl font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-all">
+                                完成，关闭
+                            </button>
+                        )}
+                        {!running && !finished && (
+                            <button onClick={onClose} className="px-5 py-3 rounded-xl text-slate-500 hover:bg-slate-100 transition-all">取消</button>
+                        )}
+                    </div>
+
+                    <p className="text-[10px] text-slate-400 text-center">每条记录间隔 1.5 秒，请保持页面开启直到完成</p>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // 外校用户列表组件（内联）
 const ExternalUsersTab: React.FC<{ users: any[]; isLoading: boolean }> = ({ users, isLoading }) => {
     const [search, setSearch] = useState('');
@@ -220,6 +381,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
     };
 
     const [showExportMenu, setShowExportMenu] = useState(false);
+    const [showBatchCtrl, setShowBatchCtrl] = useState(false);
 
     const tabs: { key: TeacherTab; label: string; icon: string }[] = [
         { key: 'overview', label: '教学概览', icon: '📊' },
@@ -315,6 +477,14 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                         </>
                     )}
                     <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
+                        {/* 批量审辨信度 */}
+                        <button
+                            onClick={() => setShowBatchCtrl(true)}
+                            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-bold bg-purple-500 text-white hover:bg-purple-600 transition-all shadow-sm"
+                        >
+                            🔍 批量审辨信度
+                        </button>
+
                         {/* 导出按钮 */}
                         <div className="relative">
                             <button
@@ -401,6 +571,9 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                     <ExternalUsersTab users={externalUsers} isLoading={isLoading} />
                 )}
             </main>
+
+            {/* 批量审辨信度 Modal */}
+            {showBatchCtrl && <BatchCtrlModal onClose={() => setShowBatchCtrl(false)} />}
 
             {/* Footer */}
             <footer className="border-t border-slate-200 py-6 text-center">
