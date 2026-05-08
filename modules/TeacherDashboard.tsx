@@ -345,39 +345,99 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
         downloadCSV(rows, `学生学习汇总_${label}_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '')}.csv`);
     };
 
-    // 导出②：审辨信度明细（仅已分析记录）
+    // 导出②：审辨信度汇总（每个学生一行，多次记录水平展开）
     const exportCtrlScores = () => {
         const studentMap: Record<string, any> = {};
         filtered.students.forEach((s: any) => { studentMap[s.id] = s; });
 
-        const rows: string[][] = [
-            ['姓名', '学号', '班级', '写作题目', '完成状态', '观点一致性', '论证递进性', '语言自主性', '观点拓展度', '审辨信度总分', '分析时间', '观点一致性评语', '论证递进性评语', '语言自主性评语', '观点拓展度评语', '总体评语'],
-        ];
-
+        // 按学生分组，时间升序（第1次→最新）
+        const byStudent: Record<string, any[]> = {};
         filtered.thinkingProcesses
             .filter((t: any) => t.ctrl_score?.total != null)
-            .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+            .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
             .forEach((t: any) => {
-                const s = studentMap[t.user_id] || {};
-                const cs = t.ctrl_score;
-                rows.push([
-                    s.name || '', s.student_id || '', s.class_name || '',
-                    t.topic || '', t.status || '',
-                    String(cs.opinionConsistency ?? ''), String(cs.argumentProgression ?? ''),
-                    String(cs.linguisticAutonomy ?? ''), String(cs.thoughtExpansion ?? ''),
-                    String(cs.total ?? ''),
-                    cs.analyzedAt ? new Date(cs.analyzedAt).toLocaleString('zh-CN') : '',
-                    cs.explanations?.opinionConsistency || '',
-                    cs.explanations?.argumentProgression || '',
-                    cs.explanations?.linguisticAutonomy || '',
-                    cs.explanations?.thoughtExpansion || '',
-                    cs.overallComment || '',
-                ]);
+                if (!byStudent[t.user_id]) byStudent[t.user_id] = [];
+                byStudent[t.user_id].push(t);
             });
 
-        if (rows.length === 1) { alert('当前筛选范围内暂无已分析的审辨信度记录'); return; }
+        if (Object.keys(byStudent).length === 0) {
+            alert('当前筛选范围内暂无已分析的审辨信度记录');
+            return;
+        }
+
+        // 找出最多分析次数，用于生成动态列头
+        const maxCount = Math.max(...Object.values(byStudent).map(arr => arr.length));
+
+        // 构建表头
+        const header = [
+            '姓名', '学号', '班级',
+            '分析次数', '平均总分', '首次总分', '最新总分', '分数变化',
+            '平均观点一致性', '平均论证递进性', '平均语言自主性', '平均观点拓展度',
+        ];
+        for (let i = 1; i <= maxCount; i++) {
+            header.push(
+                `第${i}次题目`, `第${i}次总分`,
+                `第${i}次观点一致性`, `第${i}次论证递进性`,
+                `第${i}次语言自主性`, `第${i}次观点拓展度`,
+                `第${i}次分析时间`,
+            );
+        }
+
+        const rows: string[][] = [header];
+
+        // 按班级+姓名排序输出
+        const sortedStudentIds = Object.keys(byStudent).sort((a, b) => {
+            const sa = studentMap[a] || {};
+            const sb = studentMap[b] || {};
+            const classCompare = (sa.class_name || '').localeCompare(sb.class_name || '');
+            return classCompare !== 0 ? classCompare : (sa.name || '').localeCompare(sb.name || '');
+        });
+
+        sortedStudentIds.forEach(uid => {
+            const s = studentMap[uid] || {};
+            const records = byStudent[uid];
+            const scores = records.map((t: any) => t.ctrl_score.total ?? 0);
+            const avg = (scores.reduce((a: number, b: number) => a + b, 0) / scores.length).toFixed(1);
+            const first = scores[0].toFixed(1);
+            const latest = scores[scores.length - 1].toFixed(1);
+            const delta = (scores[scores.length - 1] - scores[0]).toFixed(1);
+
+            const dims = ['opinionConsistency', 'argumentProgression', 'linguisticAutonomy', 'thoughtExpansion'];
+            const dimAvgs = dims.map(d => {
+                const vals = records.map((t: any) => t.ctrl_score[d] ?? 0);
+                return (vals.reduce((a: number, b: number) => a + b, 0) / vals.length).toFixed(1);
+            });
+
+            const row: string[] = [
+                s.name || '', s.student_id || '', s.class_name || '',
+                String(records.length), avg, first, latest,
+                Number(delta) > 0 ? `+${delta}` : delta,
+                ...dimAvgs,
+            ];
+
+            // 逐次追加
+            for (let i = 0; i < maxCount; i++) {
+                if (i < records.length) {
+                    const t = records[i];
+                    const cs = t.ctrl_score;
+                    row.push(
+                        t.topic || '',
+                        String(cs.total ?? ''),
+                        String(cs.opinionConsistency ?? ''),
+                        String(cs.argumentProgression ?? ''),
+                        String(cs.linguisticAutonomy ?? ''),
+                        String(cs.thoughtExpansion ?? ''),
+                        cs.analyzedAt ? new Date(cs.analyzedAt).toLocaleString('zh-CN') : '',
+                    );
+                } else {
+                    row.push('', '', '', '', '', '', '');
+                }
+            }
+            rows.push(row);
+        });
+
         const label = selectedClass === 'all' ? '全部班级' : selectedClass;
-        downloadCSV(rows, `审辨信度明细_${label}_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '')}.csv`);
+        downloadCSV(rows, `审辨信度汇总_${label}_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '')}.csv`);
     };
 
     const [showExportMenu, setShowExportMenu] = useState(false);
