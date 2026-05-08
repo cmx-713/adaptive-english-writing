@@ -507,94 +507,73 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
             <main className="max-w-7xl mx-auto px-4 py-8">
 
                 {/* 当前班级 Banner */}
-                <div className="mb-6 flex items-center gap-3 px-5 py-3 bg-white rounded-2xl border border-slate-200 shadow-sm">
-                    <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${selectedClass === 'all' ? 'bg-slate-400' : 'bg-[#1e2d4a]'}`}></div>
-                    <span className="text-sm font-bold text-slate-700">
-                        {selectedClass === 'all' ? '全部班级' : selectedClass}
-                    </span>
-                    <span className="text-slate-300">·</span>
-                    <span className="text-sm text-slate-500">
-                        {filtered.students.length} 名学生
-                    </span>
-                    <span className="text-slate-300">·</span>
-                    <span className="text-sm text-slate-500">
-                        {filtered.essays.length} 篇作文
-                    </span>
-                    <span className="text-slate-300">·</span>
-                    <span className="text-sm text-slate-500">
-                        {filtered.drills.length} 次特训
-                    </span>
-                    {selectedClass !== 'all' && (
-                        <>
-                            <span className="text-slate-300">·</span>
-                            <span className="text-sm text-slate-500">
-                                均分 <strong className="text-slate-700">
-                                    {filtered.essays.length > 0
-                                        ? (filtered.essays.reduce((s: number, e: any) => s + (e.total_score || 0), 0) / filtered.essays.length).toFixed(1)
-                                        : '—'}
-                                </strong> / 15
-                            </span>
-                        </>
-                    )}
-                    <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
+                <div className="mb-6 flex items-center gap-4 px-5 py-3 bg-white rounded-2xl border border-slate-200 shadow-sm flex-wrap">
+
+                    {/* 班级下拉 */}
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-400 font-medium whitespace-nowrap">筛选班级</span>
+                        <select
+                            value={selectedClass}
+                            onChange={e => setSelectedClass(e.target.value)}
+                            className="text-sm font-bold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 outline-none focus:border-[#1e2d4a]/40 cursor-pointer appearance-none pr-8"
+                            style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E")`, backgroundPosition: 'right 0.4rem center', backgroundRepeat: 'no-repeat', backgroundSize: '1.1em' }}
+                        >
+                            <option value="all">全部班级</option>
+                            {classList.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                    </div>
+
+                    {/* 统计数字 */}
+                    <div className="flex items-center gap-3 text-sm text-slate-500">
+                        <span><strong className="text-slate-700">{filtered.students.length}</strong> 名学生</span>
+                        <span className="text-slate-300">·</span>
+                        <span><strong className="text-slate-700">{filtered.essays.length}</strong> 篇作文</span>
+                        <span className="text-slate-300">·</span>
+                        <span><strong className="text-slate-700">{filtered.drills.length}</strong> 次特训</span>
+                        {selectedClass !== 'all' && filtered.essays.length > 0 && (
+                            <>
+                                <span className="text-slate-300">·</span>
+                                <span>均分 <strong className="text-slate-700">
+                                    {(filtered.essays.reduce((s: number, e: any) => s + (e.total_score || 0), 0) / filtered.essays.length).toFixed(1)}
+                                </strong> / 15</span>
+                            </>
+                        )}
+                    </div>
+
+                    {/* 工具按钮组 */}
+                    <div className="ml-auto flex items-center gap-2">
                         {/* 批量审辨信度 */}
                         <button
                             onClick={() => setShowBatchCtrl(true)}
-                            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-bold bg-purple-500 text-white hover:bg-purple-600 transition-all shadow-sm"
+                            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-bold bg-purple-500 text-white hover:bg-purple-600 transition-all shadow-sm whitespace-nowrap"
                         >
                             🔍 批量审辨信度
                         </button>
 
-                        {/* 导出按钮 */}
+                        {/* 导出数据 */}
                         <div className="relative">
                             <button
                                 onClick={() => setShowExportMenu(v => !v)}
-                                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-all shadow-sm"
+                                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-all shadow-sm whitespace-nowrap"
                             >
-                                📥 导出数据
+                                📥 导出数据 ▾
                             </button>
                             {showExportMenu && (
                                 <>
                                     <div className="fixed inset-0 z-10" onClick={() => setShowExportMenu(false)} />
-                                    <div className="absolute right-0 top-8 z-20 bg-white rounded-xl shadow-lg border border-slate-200 py-1 min-w-[160px]">
-                                        <button
-                                            onClick={() => { exportStudentSummary(); setShowExportMenu(false); }}
-                                            className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 font-medium"
-                                        >
+                                    <div className="absolute right-0 top-9 z-20 bg-white rounded-xl shadow-lg border border-slate-200 py-1 min-w-[160px]">
+                                        <button onClick={() => { exportStudentSummary(); setShowExportMenu(false); }}
+                                            className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 font-medium">
                                             👥 学生学习汇总
                                         </button>
-                                        <button
-                                            onClick={() => { exportCtrlScores(); setShowExportMenu(false); }}
-                                            className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 font-medium"
-                                        >
-                                            🔍 审辨信度明细
+                                        <button onClick={() => { exportCtrlScores(); setShowExportMenu(false); }}
+                                            className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 font-medium">
+                                            🔍 审辨信度汇总
                                         </button>
                                     </div>
                                 </>
                             )}
                         </div>
-                        <span className="text-xs text-slate-400 mr-1">筛选班级：</span>
-                        <button
-                            onClick={() => setSelectedClass('all')}
-                            className={`text-xs px-2.5 py-1 rounded-lg font-bold transition-all ${selectedClass === 'all'
-                                ? 'bg-[#1e2d4a] text-white'
-                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                            }`}
-                        >
-                            全部
-                        </button>
-                        {classList.map(cls => (
-                            <button
-                                key={cls}
-                                onClick={() => setSelectedClass(cls)}
-                                className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-all ${selectedClass === cls
-                                    ? 'bg-[#1e2d4a] text-white'
-                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                                }`}
-                            >
-                                {cls}
-                            </button>
-                        ))}
                     </div>
                 </div>
 
