@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { getAllLearningStats, LearningStats, getHistory, getAggregatedUserVocab, getAggregatedUserCollocations, getAggregatedUserErrors } from '../services/storageService';
-import { HistoryItem, ScaffoldContent, EssayHistoryData, AggregatedError, CritiqueCategory, EssayGradeResult, Tab, VocabularyItem } from '../types';
+import { getAllLearningStats, LearningStats, getHistory, getAggregatedUserCollocations, getAggregatedUserErrors } from '../services/storageService';
+import { HistoryItem, ScaffoldContent, EssayHistoryData, AggregatedError, CritiqueCategory, EssayGradeResult, Tab } from '../types';
 import ResultsDisplay from '../components/ResultsDisplay';
 import GradingReport from '../components/GradingReport';
-import { getThinkingProcessByUser, getEssayGradesByUser } from '../services/supabaseDataService';
+import { getThinkingProcessByUser, getEssayGradesByUser, getVocabularyBank, deleteVocabBankEntry, VocabBankEntry } from '../services/supabaseDataService';
 import { computeMilestones } from '../services/milestones';
 
 /** 学习中心展示用：与 Supabase ctrl_score JSON 对齐的宽松类型（避免依赖 LLM 运行时模块） */
@@ -58,52 +58,6 @@ const StatCard = ({ icon, label, value, colorClass, desc }: { icon: string, labe
   </div>
 );
 
-// 🆕 VocabCard: 悬浮式词汇卡片组件
-const VocabCard: React.FC<{ vocab: VocabularyItem }> = ({ vocab }) => {
-  return (
-    <div className="group relative inline-block">
-      {/* 默认显示：英文单词 + 中文悬浮标签 */}
-      <div className="px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-lg font-medium group-hover:bg-blue-50 group-hover:text-blue-900 group-hover:border-blue-300 transition-all cursor-pointer select-none flex items-center gap-1.5">
-        <span className="font-semibold">{vocab.word}</span>
-        <span className="text-xs text-slate-400 group-hover:text-blue-600">{vocab.chinese}</span>
-      </div>
-
-      {/* 悬停显示：完整详情卡片 */}
-      <div className="absolute left-0 top-full mt-2 w-80 bg-white rounded-xl shadow-2xl border-2 border-blue-200 p-4 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 z-50 pointer-events-none">
-        {/* 箭头装饰 */}
-        <div className="absolute -top-2 left-4 w-4 h-4 bg-white border-t-2 border-l-2 border-blue-200 transform rotate-45"></div>
-
-        {/* 卡片内容 */}
-        <div className="space-y-3">
-          {/* 标题：英文单词 */}
-          <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
-            <span className="text-2xl">📘</span>
-            <h4 className="text-lg font-bold text-slate-800">{vocab.word}</h4>
-          </div>
-
-          {/* 中文释义 */}
-          <div className="flex items-start gap-2">
-            <span className="text-sm mt-0.5">🇨🇳</span>
-            <div>
-              <div className="text-xs text-slate-400 font-bold uppercase mb-0.5">中文释义</div>
-              <div className="text-sm font-medium text-slate-700">{vocab.chinese}</div>
-            </div>
-          </div>
-
-          {/* 用法示例（英文 + 中文） */}
-          <div className="flex items-start gap-2 bg-blue-50/50 -mx-4 -mb-4 p-3 rounded-b-xl">
-            <span className="text-sm mt-0.5">✏️</span>
-            <div className="space-y-1.5">
-              <div className="text-xs text-blue-700 font-bold uppercase">Usage Example</div>
-              <div className="text-xs text-slate-700 leading-relaxed italic">{vocab.usage}</div>
-              <div className="text-xs text-slate-500 leading-relaxed">{vocab.usageChinese}</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 // 🆕 CollocationBadge: 地道搭配展示组件
 const CollocationBadge: React.FC<{ collocation: { en: string; zh: string } }> = ({ collocation }) => {
@@ -497,18 +451,24 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
   // State
   const [stats, setStats] = useState<LearningStats>({ socraticCount: 0, graderCount: 0, drillCount: 0 });
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
-  const [recentVocab, setRecentVocab] = useState<VocabularyItem[]>([]);
   const [recentCollocations, setRecentCollocations] = useState<{ en: string; zh: string; topic: string; date: string }[]>([]);
   const [recentErrors, setRecentErrors] = useState<AggregatedError[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewingItem, setViewingItem] = useState<HistoryItem | null>(null);
 
+  // 词汇银行 state
+  const [vocabBank, setVocabBank] = useState<VocabBankEntry[]>([]);
+  const [vocabBankLoading, setVocabBankLoading] = useState(false);
+  const [vocabSearch, setVocabSearch] = useState('');
+  const [vocabTopicFilter, setVocabTopicFilter] = useState<string>('ALL');
+  const [expandedVocabId, setExpandedVocabId] = useState<string | null>(null);
+
   // Interactive State
   const [revealedExplanationIds, setRevealedExplanationIds] = useState<Set<number>>(new Set());
   const [activeErrorFilter, setActiveErrorFilter] = useState<CritiqueCategory | 'ALL'>('ALL');
-  const [showDimensionTrends, setShowDimensionTrends] = useState(false); // 🆕 4维度历史趋势折叠状态
-  const [showTrainingPreview, setShowTrainingPreview] = useState(false); // 🆕 训练预览对话框
-  const [pendingTrainingCategory, setPendingTrainingCategory] = useState<CritiqueCategory | null>(null); // 🆕 待训练的维度
+  const [showDimensionTrends, setShowDimensionTrends] = useState(false);
+  const [showTrainingPreview, setShowTrainingPreview] = useState(false);
+  const [pendingTrainingCategory, setPendingTrainingCategory] = useState<CritiqueCategory | null>(null);
   const [showAllHistory, setShowAllHistory] = useState(false);
   const [activeVaultTab, setActiveVaultTab] = useState<'vocabulary' | 'collocations'>('vocabulary');
   const [ctrlHistory, setCtrlHistory] = useState<CtrlHistoryEntry[]>([]);
@@ -739,6 +699,26 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  // 词汇银行：筛选逻辑
+  const vocabTopics = useMemo(() => {
+    const topics = Array.from(new Set(vocabBank.map(v => v.topic).filter(Boolean))) as string[];
+    return topics;
+  }, [vocabBank]);
+
+  const getFilteredVocab = useCallback(() => {
+    return vocabBank.filter(v => {
+      const matchSearch = !vocabSearch || v.word.toLowerCase().includes(vocabSearch.toLowerCase()) || v.chinese.includes(vocabSearch);
+      const matchTopic = vocabTopicFilter === 'ALL' || v.topic === vocabTopicFilter;
+      return matchSearch && matchTopic;
+    });
+  }, [vocabBank, vocabSearch, vocabTopicFilter]);
+
+  // 词汇银行：删除词条
+  const handleDeleteVocab = async (entryId: string) => {
+    await deleteVocabBankEntry(entryId);
+    setVocabBank(prev => prev.filter(v => v.id !== entryId));
+  };
+
   const handleConfirmTraining = () => {
     setShowTrainingPreview(false);
     // 根据维度类型跳转到对应模块
@@ -750,25 +730,29 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
     // TODO: 未来可以在这里传递训练配置参数到对应模块
   };
 
-  // 🆕 CSV导出功能
+  // CSV导出功能
   const handleExportCSV = () => {
     let csvContent = '';
     let filename = '';
 
     if (activeVaultTab === 'vocabulary') {
-      // 导出核心词汇
+      // 导出词汇银行（当前筛选结果）
+      const filtered = getFilteredVocab();
       csvContent = '\uFEFF'; // UTF-8 BOM for Excel
-      csvContent += '英文,中文,例句(英文),例句(中文)\n';
-      recentVocab.forEach(vocab => {
+      csvContent += '英文,中文,英文释义,例句(英文),例句(中文),来源话题,出现次数\n';
+      filtered.forEach(v => {
         const row = [
-          vocab.word,
-          vocab.chinese,
-          vocab.usage.replace(/,/g, '，'), // 替换英文逗号避免CSV格式问题
-          vocab.usageChinese?.replace(/,/g, '，') || ''
+          v.word,
+          v.chinese,
+          (v.english_def || '').replace(/,/g, '，'),
+          (v.usage || '').replace(/,/g, '，'),
+          (v.usage_zh || '').replace(/,/g, '，'),
+          (v.topic || '').replace(/,/g, '，'),
+          v.frequency,
         ].join(',');
         csvContent += row + '\n';
       });
-      filename = `核心词汇_${new Date().toISOString().slice(0, 10)}.csv`;
+      filename = `词汇银行_${new Date().toISOString().slice(0, 10)}.csv`;
     } else {
       // 导出地道搭配
       csvContent = '\uFEFF';
@@ -798,15 +782,12 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
     try {
       setStats(getAllLearningStats());
       setHistoryItems(getHistory());
-      setRecentVocab(getAggregatedUserVocab(15));
       setRecentCollocations(getAggregatedUserCollocations(20));
       setRecentErrors(getAggregatedUserErrors(20));
     } catch (err) {
       console.error('[ProfileCenter] Failed to load data:', err);
-      // 数据加载失败时使用默认空值，不阻止渲染
       setStats({ socraticCount: 0, graderCount: 0, drillCount: 0 });
       setHistoryItems([]);
-      setRecentVocab([]);
       setRecentCollocations([]);
       setRecentErrors([]);
     }
@@ -816,12 +797,18 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
   useEffect(() => {
     if (!isActive) return;
     refreshData();
-    // 从 Supabase 加载 CTRL 审辨信度历史
+    // 从 Supabase 加载 CTRL 审辨信度历史 & 词汇银行
     try {
       const saved = localStorage.getItem('cet_student_user');
       if (saved) {
         const user = JSON.parse(saved);
         if (user?.id) {
+          // 加载词汇银行
+          setVocabBankLoading(true);
+          getVocabularyBank(user.id, 200).then(({ data }) => {
+            setVocabBank(data || []);
+          }).catch(() => setVocabBank([])).finally(() => setVocabBankLoading(false));
+
           Promise.all([
             getThinkingProcessByUser(user.id),
             getEssayGradesByUser(user.id),
@@ -1213,39 +1200,43 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
 
           {/* 3. Insight Sections */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
-            {/* Left: Vocabulary Vault with Tabs */}
+            {/* Left: 词汇银行 + 地道搭配 */}
             <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm flex flex-col h-[600px]">
               <div className="flex items-center justify-between mb-4 pb-2 border-b border-slate-50 flex-shrink-0">
                 <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center text-lg">📚</div>
-                  <div><h3 className="font-bold text-slate-800">语料库积累 (Word Vault)</h3><p className="text-[10px] text-slate-400 uppercase tracking-wider">Recently Acquired</p></div>
+                  <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center text-base font-bold">词</div>
+                  <div>
+                    <h3 className="font-bold text-slate-800">词汇银行</h3>
+                    <p className="text-[10px] text-slate-400 uppercase tracking-wider">
+                      {activeVaultTab === 'vocabulary' ? `已积累 ${vocabBank.length} 个词汇` : 'Collocations'}
+                    </p>
+                  </div>
                 </div>
                 <button
                   onClick={handleExportCSV}
-                  disabled={activeVaultTab === 'vocabulary' ? recentVocab.length === 0 : recentCollocations.length === 0}
-                  className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-900 text-xs font-bold rounded-lg transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={activeVaultTab === 'vocabulary' ? vocabBank.length === 0 : recentCollocations.length === 0}
+                  className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-medium rounded-lg border border-slate-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   title="导出当前分类为CSV"
                 >
-                  <span>📥</span>
-                  <span>导出</span>
+                  导出 CSV
                 </button>
               </div>
 
               {/* Tab 切换 */}
-              <div className="flex gap-2 mb-4 flex-shrink-0">
+              <div className="flex gap-2 mb-3 flex-shrink-0">
                 <button
                   onClick={() => setActiveVaultTab('vocabulary')}
                   className={`flex-1 px-3 py-2 rounded-lg text-sm font-bold transition-all ${activeVaultTab === 'vocabulary'
-                    ? 'bg-blue-900 text-white shadow-md'
+                    ? 'bg-slate-800 text-white shadow-sm'
                     : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
                     }`}
                 >
-                  核心词汇 ({recentVocab.length})
+                  核心词汇 ({vocabBank.length})
                 </button>
                 <button
                   onClick={() => setActiveVaultTab('collocations')}
                   className={`flex-1 px-3 py-2 rounded-lg text-sm font-bold transition-all ${activeVaultTab === 'collocations'
-                    ? 'bg-blue-900 text-white shadow-md'
+                    ? 'bg-slate-800 text-white shadow-sm'
                     : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
                     }`}
                 >
@@ -1253,16 +1244,81 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                 </button>
               </div>
 
-              {/* 内容展示（添加滚动） */}
+              {/* 词汇银行：搜索 + 话题筛选 */}
+              {activeVaultTab === 'vocabulary' && (
+                <div className="flex gap-2 mb-3 flex-shrink-0">
+                  <input
+                    type="text"
+                    value={vocabSearch}
+                    onChange={e => setVocabSearch(e.target.value)}
+                    placeholder="搜索单词或中文..."
+                    className="flex-1 px-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-slate-400 bg-slate-50"
+                  />
+                  {vocabTopics.length > 0 && (
+                    <select
+                      value={vocabTopicFilter}
+                      onChange={e => setVocabTopicFilter(e.target.value)}
+                      className="px-2 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-slate-400 bg-slate-50 text-slate-700 max-w-[130px]"
+                    >
+                      <option value="ALL">全部话题</option>
+                      {vocabTopics.map(t => (
+                        <option key={t} value={t}>{t.length > 12 ? t.slice(0, 12) + '…' : t}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
+
+              {/* 内容展示 */}
               <div className="flex-1 overflow-y-auto custom-scrollbar">
                 {activeVaultTab === 'vocabulary' ? (
-                  recentVocab.length > 0 ? (
-                    <div className="flex flex-col gap-2 pr-2">
-                      {recentVocab.map((vocab, i) => (
-                        <VocabCard key={i} vocab={vocab} />
-                      ))}
-                    </div>
-                  ) : <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm py-8"><span>📭 暂无积累</span></div>
+                  vocabBankLoading ? (
+                    <div className="h-full flex items-center justify-center text-slate-400 text-sm">加载中...</div>
+                  ) : (() => {
+                    const filtered = getFilteredVocab();
+                    return filtered.length > 0 ? (
+                      <div className="flex flex-col gap-1 pr-1">
+                        {filtered.map(v => (
+                          <div
+                            key={v.id}
+                            className="border border-slate-100 rounded-lg overflow-hidden"
+                          >
+                            {/* 词汇行（可展开） */}
+                            <div
+                              className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-slate-50 transition-colors select-none"
+                              onClick={() => setExpandedVocabId(expandedVocabId === v.id ? null : v.id)}
+                            >
+                              <span className="font-semibold text-slate-800 text-sm flex-1">{v.word}</span>
+                              <span className="text-xs text-slate-500 mr-1">{v.chinese}</span>
+                              {v.frequency > 1 && (
+                                <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 text-[10px] font-bold rounded border border-amber-200">
+                                  ×{v.frequency}
+                                </span>
+                              )}
+                              <button
+                                onClick={e => { e.stopPropagation(); handleDeleteVocab(v.id); }}
+                                className="ml-1 text-slate-300 hover:text-rose-400 transition-colors text-xs leading-none"
+                                title="移除此词汇"
+                              >✕</button>
+                            </div>
+                            {/* 展开详情 */}
+                            {expandedVocabId === v.id && (
+                              <div className="px-3 pb-3 pt-1 bg-slate-50 text-xs text-slate-600 space-y-1 border-t border-slate-100">
+                                {v.english_def && <p><span className="font-medium text-slate-500">Def: </span>{v.english_def}</p>}
+                                {v.usage && <p className="italic text-slate-700">"{v.usage}"</p>}
+                                {v.usage_zh && <p className="text-slate-500">{v.usage_zh}</p>}
+                                {v.topic && <p className="text-slate-400">话题：{v.topic}</p>}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm py-8">
+                        {vocabBank.length === 0 ? '完成一次思维训练后，词汇将自动入库' : '未找到匹配词汇'}
+                      </div>
+                    );
+                  })()
                 ) : (
                   recentCollocations.length > 0 ? (
                     <div className="flex flex-col gap-2 pr-2">
@@ -1270,7 +1326,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                         <CollocationBadge key={i} collocation={col} />
                       ))}
                     </div>
-                  ) : <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm py-8"><span>📭 暂无积累</span></div>
+                  ) : <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm py-8">暂无积累</div>
                 )}
               </div>
             </div>

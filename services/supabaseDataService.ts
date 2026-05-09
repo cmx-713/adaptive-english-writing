@@ -1023,6 +1023,123 @@ export const saveCtrlScore = async (processId: string, ctrlScore: object) => {
   }
 }
 
+// ==========================================
+// 词汇银行（wc_vocabulary_bank）
+// ==========================================
+
+export interface VocabBankEntry {
+  id: string
+  user_id: string
+  word: string
+  chinese: string
+  english_def: string | null
+  usage: string | null
+  usage_zh: string | null
+  topic: string | null
+  frequency: number
+  first_seen: string
+  last_seen: string
+}
+
+/**
+ * 批量 upsert 词汇到词汇银行
+ * 若单词已存在则累加 frequency 并更新 last_seen；否则插入新行
+ * @param userId  当前用户 Supabase id
+ * @param words   VocabularyItem 数组（来自 scaffold 结果）
+ * @param topic   当次训练话题（用于记录词汇来源）
+ */
+export const upsertVocabularyBank = async (
+  userId: string,
+  words: { word: string; chinese: string; englishDefinition?: string; usage?: string; usageChinese?: string }[],
+  topic: string
+) => {
+  if (!words || words.length === 0) return
+
+  try {
+    // 先查询该用户已存在的词汇（批量）
+    const wordList = words.map(w => w.word.toLowerCase())
+    const { data: existing } = await supabase
+      .from('wc_vocabulary_bank')
+      .select('id, word, frequency')
+      .eq('user_id', userId)
+      .in('word', wordList)
+
+    const existingMap = new Map<string, { id: string; frequency: number }>(
+      (existing || []).map((r: any) => [r.word.toLowerCase(), { id: r.id, frequency: r.frequency }])
+    )
+
+    const now = new Date().toISOString()
+    const toInsert: any[] = []
+    const toUpdate: { id: string; frequency: number }[] = []
+
+    for (const w of words) {
+      const key = w.word.toLowerCase()
+      const found = existingMap.get(key)
+      if (found) {
+        toUpdate.push({ id: found.id, frequency: found.frequency + 1 })
+      } else {
+        toInsert.push({
+          user_id: userId,
+          word: w.word,
+          chinese: w.chinese,
+          english_def: w.englishDefinition || null,
+          usage: w.usage || null,
+          usage_zh: w.usageChinese || null,
+          topic,
+          frequency: 1,
+          first_seen: now,
+          last_seen: now,
+        })
+      }
+    }
+
+    // 批量插入新词汇
+    if (toInsert.length > 0) {
+      const { error: insErr } = await supabase.from('wc_vocabulary_bank').insert(toInsert)
+      if (insErr) console.error('[VocabBank] 插入词汇失败:', insErr)
+    }
+
+    // 逐条更新已存在词汇的频次
+    for (const u of toUpdate) {
+      await supabase
+        .from('wc_vocabulary_bank')
+        .update({ frequency: u.frequency, last_seen: now })
+        .eq('id', u.id)
+    }
+  } catch (err) {
+    console.error('[VocabBank] upsert 异常:', err)
+  }
+}
+
+/**
+ * 获取指定用户的词汇银行列表
+ * 按 frequency 降序排列，支持分页
+ */
+export const getVocabularyBank = async (userId: string, limit = 200, offset = 0) => {
+  const { data, error } = await supabase
+    .from('wc_vocabulary_bank')
+    .select('*')
+    .eq('user_id', userId)
+    .order('frequency', { ascending: false })
+    .order('last_seen', { ascending: false })
+    .range(offset, offset + limit - 1)
+
+  return { data: (data || []) as VocabBankEntry[], error }
+}
+
+/**
+ * 删除词汇银行中的某条词汇（按 id）
+ */
+export const deleteVocabBankEntry = async (entryId: string) => {
+  const { error } = await supabase
+    .from('wc_vocabulary_bank')
+    .delete()
+    .eq('id', entryId)
+
+  if (error) console.error('[VocabBank] 删除词汇失败:', error)
+  return { error }
+}
+
 /**
  * 获取指定学生的思维过程记录
  */
