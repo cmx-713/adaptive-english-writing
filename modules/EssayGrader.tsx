@@ -54,12 +54,51 @@ interface EssayGraderProps {
   supabaseUserId?: string;
 }
 
+// 自评分数结构
+interface SelfEval {
+  content: number;       // 0-4
+  organization: number;  // 0-3
+  proficiency: number;   // 0-5
+  clarity: number;       // 0-3
+}
+
+// 评分按钮组件
+const ScoreSelector: React.FC<{
+  label: string; sub: string; max: number; value: number;
+  onChange: (v: number) => void; color: string;
+}> = ({ label, sub, max, value, onChange, color }) => (
+  <div className="space-y-2">
+    <div className="flex items-baseline justify-between">
+      <span className="text-sm font-bold text-slate-700">{label}</span>
+      <span className="text-xs text-slate-400">{sub} / {max} 分</span>
+    </div>
+    <div className="flex gap-1.5 flex-wrap">
+      {Array.from({ length: max + 1 }, (_, i) => (
+        <button key={i} type="button" onClick={() => onChange(i)}
+          className={`w-9 h-9 rounded-lg text-sm font-bold transition-all border-2 ${value === i
+            ? 'text-white border-transparent shadow-sm'
+            : 'bg-white text-slate-400 border-slate-200 hover:border-slate-300'}`}
+          style={value === i ? { backgroundColor: color, borderColor: color } : {}}>
+          {i}
+        </button>
+      ))}
+    </div>
+  </div>
+);
+
 const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsumed, supabaseUserId }) => {
   const [topic, setTopic] = useState('');
   const [essayText, setEssayText] = useState('');
   const [isGrading, setIsGrading] = useState(false);
   const [result, setResult] = useState<EssayGradeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // 自评状态
+  const [selfEvalStep, setSelfEvalStep] = useState<'idle' | 'evaluating' | 'done'>('idle');
+  const [selfEval, setSelfEval] = useState<SelfEval>({ content: 2, organization: 1, proficiency: 2, clarity: 1 });
+  const [submittedSelfEval, setSubmittedSelfEval] = useState<SelfEval | null>(null);
+  const aiResultRef = useRef<EssayGradeResult | null>(null); // 并行时暂存AI结果
+  const selfEvalSubmittedRef = useRef<boolean>(false);        // 跟踪自评是否已提交（避免闭包陷阱）
 
   // Timer State
   const [isTimerActive, setIsTimerActive] = useState(false);
@@ -77,8 +116,15 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
     if (prefillData) {
       setTopic(prefillData.topic);
       setEssayText(prefillData.essay);
-      setResult(null); // 清除之前的批改结果
+      setResult(null);
       setError(null);
+      // 重置自评状态，避免残留导致视图错乱
+      setSelfEvalStep('idle');
+      setSelfEval({ content: 2, organization: 1, proficiency: 2, clarity: 1 });
+      setSubmittedSelfEval(null);
+      aiResultRef.current = null;
+      selfEvalSubmittedRef.current = false;
+      setIsGrading(false);
       if (onPrefillConsumed) onPrefillConsumed();
     }
   }, [prefillData]);
@@ -105,39 +151,59 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
     }
   }, [result, essayText, getEffectiveTopic]);
 
+  // 保存AI批改结果的公共函数
+  const saveGradingResult = useCallback((gradingResult: EssayGradeResult) => {
+    const effectiveTopic = getEffectiveTopic();
+    const historyData: EssayHistoryData = { essay: essayText, result: gradingResult };
+    saveToHistory(effectiveTopic, historyData, 'essay_grade');
+    setIsSaved(true);
+    if (supabaseUserId) {
+      saveEssayGradeToSupabase(supabaseUserId, effectiveTopic, essayText, gradingResult).catch(() => { });
+      const duration = Math.round((Date.now() - sessionStartRef.current) / 1000);
+      logAgentUsage(supabaseUserId, '作文批改', 'writing_system', duration).catch(() => { });
+      sessionStartRef.current = Date.now();
+    }
+  }, [essayText, supabaseUserId, getEffectiveTopic]);
+
   const handleGrade = async () => {
     if (!essayText.trim()) return;
-    setIsGrading(true);
+    setIsTimerActive(false);
     setError(null);
-    setIsTimerActive(false); // Stop timer on submit
-    const gradeStartTime = Date.now(); // 记录批改开始时间
+    aiResultRef.current = null;
+    selfEvalSubmittedRef.current = false;
 
-    try {
-      const gradingResult = await gradeEssay(topic, essayText);
-      setResult(gradingResult);
+    // 显示自评界面
+    setSelfEvalStep('evaluating');
 
-      // Auto-save immediately to history
-      const effectiveTopic = getEffectiveTopic();
-      const historyData: EssayHistoryData = { essay: essayText, result: gradingResult };
-
-      // Strict dataType: 'essay_grade'
-      saveToHistory(effectiveTopic, historyData, 'essay_grade');
-      setIsSaved(true);
-      // Supabase 双写（异步，不阻断前端）
-      if (supabaseUserId) {
-        saveEssayGradeToSupabase(supabaseUserId, effectiveTopic, essayText, gradingResult).catch(() => { });
-        // 记录使用日志（含时长）
-        const duration = Math.round((Date.now() - sessionStartRef.current) / 1000);
-        logAgentUsage(supabaseUserId, '作文批改', 'writing_system', duration).catch(() => { });
-        sessionStartRef.current = Date.now(); // 重置计时器
-      }
-
-    } catch (e: any) {
-      console.error(e);
-      setError(e.message || "Failed to grade essay. Please try again later.");
-    } finally {
+    // 同时在后台开始 AI 批改
+    setIsGrading(true);
+    gradeEssay(topic, essayText).then(gradingResult => {
+      aiResultRef.current = gradingResult;
       setIsGrading(false);
+      // 如果学生已提交自评（用 ref 避免闭包陷阱），直接显示结果
+      if (selfEvalSubmittedRef.current) {
+        saveGradingResult(gradingResult);
+        setResult(gradingResult);
+      }
+    }).catch((e: any) => {
+      setIsGrading(false);
+      setError(e.message || '批改失败，请重试');
+      setSelfEvalStep('idle');
+      selfEvalSubmittedRef.current = false;
+    });
+  };
+
+  // 学生提交自评
+  const handleSelfEvalSubmit = () => {
+    selfEvalSubmittedRef.current = true;
+    setSubmittedSelfEval({ ...selfEval });
+    setSelfEvalStep('done');
+    // 如果 AI 已经批改完毕，直接显示结果
+    if (aiResultRef.current) {
+      saveGradingResult(aiResultRef.current);
+      setResult(aiResultRef.current);
     }
+    // 否则继续等待（isGrading 仍为 true，页面显示"AI正在分析"）
   };
 
   const handleSave = () => {
@@ -157,6 +223,11 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
     setError(null);
     setEssayText('');
     setTopic('');
+    setSelfEvalStep('idle');
+    setSelfEval({ content: 2, organization: 1, proficiency: 2, clarity: 1 });
+    setSubmittedSelfEval(null);
+    aiResultRef.current = null;
+    selfEvalSubmittedRef.current = false;
     setIsSaved(false);
     setIsTimerActive(false);
   };
@@ -179,7 +250,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
   };
 
   // --- View 1: Input Form ---
-  if (!result) {
+  if (!result && selfEvalStep === 'idle') {
     return (
       <div className="max-w-4xl mx-auto animate-fade-in-up">
         {/* Toolbar for History */}
@@ -245,7 +316,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
 
             <button
               onClick={handleGrade}
-              disabled={isGrading || !essayText.trim()}
+              disabled={isGrading || !essayText.trim() || selfEvalStep !== 'idle'}
               className={`w-full py-4 rounded-xl font-bold text-white text-lg shadow-md transition-colors flex items-center justify-center gap-2
                   ${isGrading || !essayText.trim()
                   ? 'bg-slate-300 cursor-not-allowed'
@@ -293,20 +364,176 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
     );
   }
 
+  // --- View 1.5: 自评 / 等待AI ---
+  if (selfEvalStep === 'evaluating' || (selfEvalStep === 'done' && isGrading)) {
+    const dims = [
+      { key: 'content' as const,      label: '内容',  sub: 'Content',      max: 4, color: '#9333ea' },
+      { key: 'organization' as const, label: '组织',  sub: 'Organization', max: 3, color: '#f59e0b' },
+      { key: 'proficiency' as const,  label: '语言',  sub: 'Proficiency',  max: 5, color: '#3b82f6' },
+      { key: 'clarity' as const,      label: '清晰',  sub: 'Clarity',      max: 3, color: '#f43f5e' },
+    ];
+
+    return (
+      <div className="max-w-2xl mx-auto">
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="h-1.5 bg-gradient-to-r from-blue-900 via-blue-700 to-blue-500" />
+          <div className="p-8">
+            {selfEvalStep === 'evaluating' ? (
+              <>
+                <div className="text-center mb-8">
+                  <div className="w-14 h-14 bg-blue-50 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-4">🪞</div>
+                  <h2 className="text-xl font-bold text-slate-800 mb-2">先评估一下自己的作文</h2>
+                  <p className="text-slate-500 text-sm">AI 正在后台批改，趁这个时候先给自己打个分。<br />自评与 AI 评的差距本身就是很好的学习素材。</p>
+                </div>
+
+                <div className="space-y-5 mb-8">
+                  {dims.map(d => (
+                    <ScoreSelector key={d.key} label={d.label} sub={d.sub} max={d.max}
+                      value={selfEval[d.key]} color={d.color}
+                      onChange={v => setSelfEval(prev => ({ ...prev, [d.key]: v }))} />
+                  ))}
+                </div>
+
+                <div className="flex items-center justify-between px-4 py-3 bg-slate-50 rounded-xl mb-6 text-sm">
+                  <span className="text-slate-500">我的自评总分</span>
+                  <span className="text-xl font-bold text-slate-800">
+                    {selfEval.content + selfEval.organization + selfEval.proficiency + selfEval.clarity}
+                    <span className="text-sm text-slate-400 font-normal"> / 15</span>
+                  </span>
+                </div>
+
+                <button onClick={handleSelfEvalSubmit}
+                  className="w-full py-4 rounded-xl font-bold text-white text-base bg-blue-900 hover:bg-blue-950 transition-colors flex items-center justify-center gap-2 shadow-md">
+                  提交自评，查看 AI 批改结果 →
+                </button>
+              </>
+            ) : (
+              /* 已提交自评，等待 AI */
+              <div className="text-center py-12">
+                <div className="relative w-16 h-16 mx-auto mb-6">
+                  <svg className="animate-spin w-16 h-16 text-blue-900" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                    <path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-bold text-slate-700 mb-2">AI 正在仔细阅读你的作文…</h3>
+                <p className="text-slate-400 text-sm">自评已提交，稍候即可看到对比结果</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // --- View 2: Report ---
-  return (
-    <>
-      <GradingReport
-        result={result}
-        essayText={essayText}
-        topic={topic}
-        onBack={reset}
-        onSave={handleSave}
-        isSaved={isSaved}
-      />
-      {/* Hidden History Button for consistent UX if user wants to switch context without fully resetting, though simpler to use Reset */}
-    </>
-  );
+  const selfTotal = submittedSelfEval
+    ? submittedSelfEval.content + submittedSelfEval.organization + submittedSelfEval.proficiency + submittedSelfEval.clarity
+    : null;
+
+  const SelfEvalComparison = () => {
+    if (!submittedSelfEval || !result) return null;
+    // 防御：subScores 可能因 LLM 异常返回为 undefined
+    const safeSub = (result as any).subScores || { content: 0, organization: 0, proficiency: 0, clarity: 0 };
+    const safeTotal = typeof result.totalScore === 'number' ? result.totalScore : 0;
+    const dims = [
+      { key: 'content' as const,      label: '内容',  aiKey: 'content',       max: 4, color: '#9333ea' },
+      { key: 'organization' as const, label: '组织',  aiKey: 'organization',  max: 3, color: '#f59e0b' },
+      { key: 'proficiency' as const,  label: '语言',  aiKey: 'proficiency',   max: 5, color: '#3b82f6' },
+      { key: 'clarity' as const,      label: '清晰',  aiKey: 'clarity',       max: 3, color: '#f43f5e' },
+    ];
+    const aiTotal = safeTotal;
+    const diff = selfTotal !== null ? selfTotal - aiTotal : 0;
+    const overallLabel = diff > 1.5 ? { text: '你高估了自己', color: 'text-rose-600', bg: 'bg-rose-50 border-rose-200' }
+      : diff < -1.5 ? { text: '你低估了自己', color: 'text-blue-600', bg: 'bg-blue-50 border-blue-200' }
+      : { text: '自评与 AI 评高度吻合', color: 'text-emerald-600', bg: 'bg-emerald-50 border-emerald-200' };
+
+    return (
+      <div className="mb-8 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">🪞</span>
+            <div>
+              <h3 className="font-bold text-slate-800">自评 vs AI 评</h3>
+              <p className="text-xs text-slate-400">元认知对比 — 了解自己的认知准确度</p>
+            </div>
+          </div>
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm font-bold ${overallLabel.bg} ${overallLabel.color}`}>
+            <span>你的总分 {selfTotal}</span>
+            <span className="opacity-40">vs</span>
+            <span>AI 总分 {aiTotal}</span>
+            <span className="ml-1 pl-2 border-l border-current/20">{diff > 0 ? `+${diff.toFixed(1)}` : diff.toFixed(1)}</span>
+          </div>
+        </div>
+        <div className="p-6 grid grid-cols-2 md:grid-cols-4 gap-4">
+          {dims.map(d => {
+            const myVal = submittedSelfEval[d.key];
+            const aiVal = (safeSub as any)[d.aiKey] ?? 0;
+            const delta = myVal - aiVal;
+            const deltaColor = Math.abs(delta) <= 0.5 ? 'text-emerald-600' : delta > 0 ? 'text-rose-600' : 'text-blue-600';
+            const deltaText = delta > 0 ? `+${delta.toFixed(1)}` : delta.toFixed(1);
+            return (
+              <div key={d.key} className="text-center p-4 bg-slate-50 rounded-xl border border-slate-100">
+                <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">{d.label}</div>
+                <div className="flex items-end justify-center gap-2 mb-2">
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-slate-400">{myVal}</div>
+                    <div className="text-[10px] text-slate-400">我的评</div>
+                  </div>
+                  <div className="text-slate-300 pb-1">vs</div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold" style={{ color: d.color }}>{aiVal}</div>
+                    <div className="text-[10px] text-slate-400">AI评</div>
+                  </div>
+                </div>
+                <div className={`text-sm font-bold ${deltaColor}`}>
+                  {Math.abs(delta) < 0.05 ? '✓ 准确' : deltaText}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className={`mx-6 mb-5 px-4 py-2.5 rounded-xl border text-sm font-medium ${overallLabel.bg} ${overallLabel.color}`}>
+          💡 {overallLabel.text}
+          {Math.abs(diff) > 1.5 && (
+            <span className="font-normal text-slate-500 ml-1">
+              — 关注与 AI 差距较大的维度，这往往是最值得深思的学习点。
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  if (!result) return null;
+
+  try {
+    return (
+      <>
+        <SelfEvalComparison />
+        <GradingReport
+          result={result}
+          essayText={essayText}
+          topic={topic}
+          onBack={reset}
+          onSave={handleSave}
+          isSaved={isSaved}
+        />
+      </>
+    );
+  } catch (renderErr: any) {
+    console.error('[EssayGrader] 渲染崩溃:', renderErr);
+    return (
+      <div className="max-w-2xl mx-auto bg-white rounded-2xl border border-rose-200 shadow-sm p-8 text-center">
+        <div className="w-14 h-14 rounded-2xl bg-rose-50 flex items-center justify-center text-3xl mx-auto mb-4">⚠️</div>
+        <h2 className="text-lg font-bold text-slate-800 mb-2">批改结果显示异常</h2>
+        <p className="text-sm text-slate-500 mb-6">AI 返回的数据结构不完整，无法正常显示。点击下方按钮重新批改。</p>
+        <button onClick={reset} className="px-6 py-2.5 rounded-xl bg-blue-900 text-white font-bold hover:bg-blue-950 transition-colors">
+          ← 返回重新批改
+        </button>
+      </div>
+    );
+  }
 };
 
 export default EssayGrader;

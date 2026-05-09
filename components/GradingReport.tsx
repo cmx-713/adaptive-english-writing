@@ -800,6 +800,17 @@ const GradingReport: React.FC<GradingReportProps> = ({
               </div>
 
               <div className="overflow-y-auto custom-scrollbar p-4 space-y-4">
+                {result.contrastiveLearning.length === 0 && (
+                  <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                    <div className="w-14 h-14 rounded-2xl bg-amber-50 flex items-center justify-center text-3xl mb-4">📭</div>
+                    <p className="text-sm font-bold text-slate-700 mb-2">本次批改未生成对比要点</p>
+                    <p className="text-xs text-slate-500 leading-relaxed mb-4">
+                      AI 偶尔会因网络或模型波动遗漏对比要点。<br />
+                      右侧的满分范文仍可直接用于学习参考。
+                    </p>
+                    <p className="text-[10px] text-slate-400">如需完整对比，可点击 ← Back 重新批改</p>
+                  </div>
+                )}
                 {result.contrastiveLearning.map((pt, i) => {
                   const isActive = activeContrastIndex === i;
                   const config = {
