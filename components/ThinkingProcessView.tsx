@@ -1,10 +1,12 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { analyzeCtrlScore, CtrlScore } from '../services/geminiService';
 import { saveCtrlScore, markCtrlReviewed } from '../services/supabaseDataService';
 
 interface ThinkingProcessViewProps {
     processes: any[];
+    /** 写入 Supabase 成功后回调，用于教师端全局同步 thinkingProcesses，切换学生不丢 */
+    onThinkingProcessCtrlSaved?: (processId: string, ctrlScore: CtrlScore) => void;
 }
 
 const CTRL_DIMS = [
@@ -14,25 +16,48 @@ const CTRL_DIMS = [
     { key: 'thoughtExpansion',    label: '观点拓展度', weight: 20, color: '#8b5cf6' },
 ] as const;
 
-const CtrlScorePanel: React.FC<{ processId: string; existingScore: CtrlScore | null; processData: any }> = ({ processId, existingScore, processData }) => {
-    const [score, setScore] = useState<CtrlScore | null>(existingScore);
+const CtrlScorePanel: React.FC<{
+    processId: string;
+    ctrlScore: CtrlScore | null;
+    processData: any;
+    onCtrlPersisted?: (processId: string, next: CtrlScore) => void;
+}> = ({ processId, ctrlScore, processData, onCtrlPersisted }) => {
+    const [score, setScore] = useState<CtrlScore | null>(ctrlScore);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [error, setError] = useState('');
     const [isMarking, setIsMarking] = useState(false);
+
+    useEffect(() => {
+        setScore(ctrlScore);
+    }, [ctrlScore]);
 
     const source: string = (score as any)?.source || 'teacher_manual';
     const reviewed: boolean = (score as any)?.reviewed === true;
 
     const handleMarkReviewed = async () => {
         setIsMarking(true);
-        await markCtrlReviewed(processId);
-        setScore(prev => prev ? { ...prev, reviewed: true } as any : prev);
-        setIsMarking(false);
+        try {
+            const { error: saveErr } = await markCtrlReviewed(processId);
+            if (saveErr) {
+                setError(typeof saveErr === 'object' && saveErr && 'message' in saveErr
+                    ? String((saveErr as Error).message)
+                    : '标记失败，请重试');
+                return;
+            }
+            const next = score ? ({ ...score, reviewed: true } as CtrlScore & { reviewed?: boolean }) : score;
+            if (next) {
+                setScore(next);
+                onCtrlPersisted?.(processId, next as CtrlScore);
+            }
+        } finally {
+            setIsMarking(false);
+        }
     };
 
     const handleAnalyze = async () => {
         setIsAnalyzing(true);
         setError('');
+        const prev = score;
         try {
             const result = await analyzeCtrlScore({
                 topic: processData.topic,
@@ -43,8 +68,21 @@ const CtrlScorePanel: React.FC<{ processId: string; existingScore: CtrlScore | n
                 dimensionDrafts: processData.dimension_drafts || {},
                 assembledEssay: processData.assembled_essay,
             });
-            setScore(result);
-            await saveCtrlScore(processId, result);
+            const prevAny = prev as any;
+            const payload: CtrlScore & { source?: string; reviewed?: boolean } = {
+                ...result,
+                source: prevAny?.source ?? 'teacher_manual',
+                reviewed: prevAny?.reviewed === true,
+            };
+            setScore(payload);
+            const { error: saveErr } = await saveCtrlScore(processId, payload);
+            if (saveErr) {
+                setScore(prev);
+                setError('保存到服务器失败，分数未更新，请检查网络后重试');
+                console.error('[CtrlScorePanel] saveCtrlScore:', saveErr);
+                return;
+            }
+            onCtrlPersisted?.(processId, payload);
         } catch (e: any) {
             setError(e?.message || '分析失败，请重试');
         } finally {
@@ -187,7 +225,7 @@ const CtrlScorePanel: React.FC<{ processId: string; existingScore: CtrlScore | n
     );
 };
 
-const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes }) => {
+const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, onThinkingProcessCtrlSaved }) => {
     const [expandedId, setExpandedId] = useState<string | null>(null);
 
     if (!processes || processes.length === 0) {
@@ -215,6 +253,8 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes }) 
         <div className="space-y-3">
             {processes.map((proc: any) => {
                 const isExpanded = expandedId === proc.id;
+                const effectiveCtrl =
+                    proc.ctrl_score && typeof proc.ctrl_score === 'object' ? proc.ctrl_score : null;
                 const status = statusConfig[proc.status] || statusConfig.in_progress;
                 const cards = proc.inspiration_cards || [];
                 const userIdeas = proc.user_ideas || {};
@@ -269,8 +309,9 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes }) 
                                 {/* 审辨信度面板 */}
                                 <CtrlScorePanel
                                     processId={proc.id}
-                                    existingScore={proc.ctrl_score || null}
+                                    ctrlScore={effectiveCtrl}
                                     processData={proc}
+                                    onCtrlPersisted={(id, next) => onThinkingProcessCtrlSaved?.(id, next)}
                                 />
                                 {/* 时间线 */}
                                 <div className="relative">

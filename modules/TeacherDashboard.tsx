@@ -1,13 +1,16 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { User } from '../types';
 import {
     getAllStudents, getAllEssayGrades, getAllDrillHistory,
     getAllScaffoldHistory, getAgentUsageSummary, getAllThinkingProcesses,
     updateStudentClass, getExternalUsers, getBatchCtrlCandidates, saveCtrlScore,
 } from '../services/supabaseDataService';
-import { analyzeCtrlScore } from '../services/geminiService';
+import { analyzeCtrlScore, CtrlScore } from '../services/geminiService';
 // 批量审辨信度生成 Modal
-const BatchCtrlModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+const BatchCtrlModal: React.FC<{
+    onClose: () => void;
+    onCtrlSaved?: (processId: string, ctrlScore: CtrlScore) => void;
+}> = ({ onClose, onCtrlSaved }) => {
     const CLASSES = ['2024级A甲6', '2024级A乙6', '2025级A甲2', '2025级A乙2'];
     const [selectedClass, setSelectedClass] = useState('');
     const [candidates, setCandidates] = useState<any[]>([]);
@@ -52,7 +55,9 @@ const BatchCtrlModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                     dimensionDrafts: rec.dimension_drafts || {},
                     assembledEssay: rec.assembled_essay,
                 });
-                await saveCtrlScore(rec.id, { ...result, source: 'auto', reviewed: false });
+                const payload = { ...result, source: 'auto' as const, reviewed: false };
+                const { error: saveErr } = await saveCtrlScore(rec.id, payload);
+                if (!saveErr) onCtrlSaved?.(rec.id, payload);
                 setDone(d => d + 1);
             } catch {
                 setFailed(f => f + 1);
@@ -288,6 +293,13 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
             ));
         }
     };
+
+    /** 审辨信度保存成功后同步到本地列表，避免切换学生后仍显示旧 ctrl_score */
+    const handleThinkingProcessCtrlSaved = useCallback((processId: string, ctrlScore: CtrlScore) => {
+        setThinkingProcesses((prev) =>
+            prev.map((t: any) => (t.id === processId ? { ...t, ctrl_score: ctrlScore } : t))
+        );
+    }, []);
 
     // 根据选中班级过滤所有数据
     const filtered = useMemo(() => {
@@ -598,6 +610,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                         isLoading={isLoading}
                         selectedClass={selectedClass}
                         onUpdateStudentClass={handleUpdateStudentClass}
+                        onThinkingProcessCtrlSaved={handleThinkingProcessCtrlSaved}
                     />
                 )}
                 {activeTab === 'essays' && (
@@ -612,7 +625,12 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
             </main>
 
             {/* 批量审辨信度 Modal */}
-            {showBatchCtrl && <BatchCtrlModal onClose={() => setShowBatchCtrl(false)} />}
+            {showBatchCtrl && (
+                <BatchCtrlModal
+                    onClose={() => setShowBatchCtrl(false)}
+                    onCtrlSaved={handleThinkingProcessCtrlSaved}
+                />
+            )}
 
             {/* Footer */}
             <footer className="border-t border-slate-200 py-6 text-center">

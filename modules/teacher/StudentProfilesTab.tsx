@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from 'recharts';
 import ThinkingProcessView from '../../components/ThinkingProcessView';
+import type { CtrlScore } from '../../services/geminiService';
 
 // 预定义班级列表
 const PREDEFINED_CLASSES = ['2024级A甲6', '2024级A乙6', '2025级A甲2', '2025级A乙2'];
@@ -23,11 +24,12 @@ interface StudentProfilesTabProps {
     isLoading: boolean;
     selectedClass?: string;
     onUpdateStudentClass?: (userId: string, className: string) => Promise<void>;
+    onThinkingProcessCtrlSaved?: (processId: string, ctrlScore: CtrlScore) => void;
 }
 
 const StudentProfilesTab: React.FC<StudentProfilesTabProps> = ({
     students, essays, drills, scaffolds, thinkingProcesses, isLoading,
-    selectedClass = 'all', onUpdateStudentClass,
+    selectedClass = 'all', onUpdateStudentClass, onThinkingProcessCtrlSaved,
 }) => {
     const [expandedId, setExpandedId] = useState<string | null>(null);
     const [sortKey, setSortKey] = useState<'name' | 'essays' | 'avg' | 'recent'>('recent');
@@ -368,7 +370,10 @@ const StudentProfilesTab: React.FC<StudentProfilesTabProps> = ({
                                                                 {s.thinkingProcessCount} 次
                                                             </span>
                                                         </h4>
-                                                        <ThinkingProcessView processes={s.thinkingProcesses} />
+                                                        <ThinkingProcessView
+                                                            processes={s.thinkingProcesses}
+                                                            onThinkingProcessCtrlSaved={onThinkingProcessCtrlSaved}
+                                                        />
                                                     </div>
                                                 )}
                                             </div>

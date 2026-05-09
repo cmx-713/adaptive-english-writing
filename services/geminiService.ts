@@ -1272,18 +1272,41 @@ export const analyzeCtrlScore = async (processData: {
     return `【维度：${d.dimension}】\n  草稿：${d.draft || '（未写）'}`;
   }).join('\n\n');
 
-  // 组织 Phase 3 数据
+  // 组织 Phase 3 数据（结构化 + 连续全文，减少模型误判「无引言/结论/过渡」）
   let phase3Text = '（未完成）';
   if (assembledEssay) {
-    const parts: string[] = [];
-    if (assembledEssay.introduction) parts.push(`引言：${assembledEssay.introduction}`);
-    if (assembledEssay.bodyParagraphs) {
-      assembledEssay.bodyParagraphs.forEach((p: any) => {
-        parts.push(`${p.dimension}：${p.draft}`);
-      });
+    const intro = (assembledEssay.introduction || '').trim();
+    const concl = (assembledEssay.conclusion || '').trim();
+    const bodies: { dimension: string; draft: string }[] = Array.isArray(assembledEssay.bodyParagraphs)
+      ? assembledEssay.bodyParagraphs.map((p: any) => ({
+          dimension: String(p?.dimension ?? ''),
+          draft: String(p?.draft ?? ''),
+        }))
+      : [];
+    const bodyDrafts = bodies.map((b) => b.draft.trim()).filter(Boolean);
+    const fullEssayForScan = [intro, ...bodyDrafts, concl].filter(Boolean).join('\n\n');
+    const transitionCue =
+      /\b(to begin with|first(ly)?|second(ly)?|third(ly)?|besides|moreover|furthermore|in addition|additionally|on the other hand|meanwhile|in contrast|for example|for instance|as a result|therefore|thus|in summary|in conclusion|overall|finally)\b/i;
+    const hasCueInBodies = bodyDrafts.some((d) => transitionCue.test(d));
+    const structuralHints = [
+      '【系统结构提示（仅供核对，请仍以正文为准，勿机械采信）】',
+      `- 引言字段非空且较长：${intro ? `是（约 ${intro.length} 字）` : '否'}`,
+      `- 结论字段非空且较长：${concl ? `是（约 ${concl.length} 字）` : '否'}`,
+      `- 主体段落数：${bodyDrafts.length}`,
+      `- 主体中是否出现常见英文衔接标记（To begin with / Besides / In summary 等）：${hasCueInBodies ? '检测到至少一处' : '未检测到明显标记（仍可能在句内衔接，请通读判断）'}`,
+    ].join('\n');
+
+    const structuredParts: string[] = [structuralHints, ''];
+    if (intro) structuredParts.push(`【引言】\n${intro}`);
+    if (bodies.length > 0) {
+      structuredParts.push(
+        '【主体段落】',
+        ...bodies.map((b, i) => `  段落${i + 1}（${b.dimension || '维度未标注'}）\n${b.draft}`)
+      );
     }
-    if (assembledEssay.conclusion) parts.push(`结论：${assembledEssay.conclusion}`);
-    phase3Text = parts.join('\n\n');
+    if (concl) structuredParts.push(`【结论】\n${concl}`);
+    structuredParts.push('', '【终稿全文（连续阅读，用于判断段间衔接与首尾呼应）】', fullEssayForScan || '（无正文）');
+    phase3Text = structuredParts.join('\n\n');
   }
 
   const schema: Schema = {
@@ -1292,14 +1315,14 @@ export const analyzeCtrlScore = async (processData: {
       opinionConsistency: { type: Type.NUMBER, description: '观点一致性得分 0-10' },
       argumentProgression: { type: Type.NUMBER, description: '论证递进性得分 0-10' },
       linguisticAutonomy: { type: Type.NUMBER, description: '语言自主性得分 0-10' },
-      thoughtExpansion: { type: Type.NUMBER, description: '观点拓展度得分 0-10' },
+      thoughtExpansion: { type: Type.NUMBER, description: '观点拓展度 0-10：评「选定方向上对AI建议的转化质量」，非是否采纳全部建议' },
       explanations: {
         type: Type.OBJECT,
         properties: {
           opinionConsistency: { type: Type.STRING, description: '观点一致性评分理由（2-3句）' },
           argumentProgression: { type: Type.STRING, description: '论证递进性评分理由（2-3句）' },
           linguisticAutonomy: { type: Type.STRING, description: '语言自主性评分理由（2-3句）' },
-          thoughtExpansion: { type: Type.STRING, description: '观点拓展度评分理由（2-3句）' },
+          thoughtExpansion: { type: Type.STRING, description: '观点拓展度理由（2-3句）：对照Phase1与终稿，写采纳方向上的深化质量；勿因未采纳某条AI建议而指责' },
         },
         required: ['opinionConsistency', 'argumentProgression', 'linguisticAutonomy', 'thoughtExpansion'],
       },
@@ -1343,12 +1366,22 @@ ${phase3Text}
 重要说明：Phase 3 的主体内容来自 Phase 2 草稿，这是正常预期，不扣分。
 评分依据分两段：
   ① Phase 1→Phase 2：学生是否将中文原始观点有效转化为英语段落（不是翻译，而是论据展开）
-  ② Phase 2→Phase 3：多个草稿段落在终稿中是否有结构性整合——包括段落间过渡句、Introduction 是否引出整体论点、Conclusion 是否综合各维度而非简单重复
+  ② Phase 2→Phase 3：多个草稿段落在终稿中是否有结构性整合——包括段落间过渡、引言是否引出整体论点、结论是否收束全文（可与主体呼应，不必堆砌新论点）
 
-- 9-10分：中文观点被充分展开为英语论证段落（①）；终稿有流畅的段落间过渡，Introduction/Conclusion 体现整体论证框架，整体呈现为连贯论文而非拼接（②）
-- 6-8分：语言转化基本完成（①）；终稿有一定整合，但过渡句不足或 Introduction/Conclusion 较为套路化（②）
-- 3-5分：语言转化勉强完成，草稿质量有限（①）；终稿基本是直接拼接草稿，段落间缺乏过渡，引言/结论与正文游离（②）
-- 0-2分：Phase 2 草稿未能有效承接 Phase 1 的观点（①）；终稿呈纯拼凑状态，各段落独立存在，无整体论证感（②）
+【论证递进性 · 并列式论证（避免误判）】
+论证递进性评估的是「转化质量」与「结构性整合」，而非强制要求论据间必须有因果或递进关系。若文章采用并列式论证结构（如用「Meanwhile」「On the other hand」「Besides」「To begin with」等连接），只要主旨句已明确预告并列关系、各段论据充分展开、首尾呼应到位，并列结构本身不构成扣分理由。扣分应聚焦于：① Phase 1→Phase 2 是否有实质展开而非简单翻译；② 引言/结论是否缺失或功能薄弱；③ 段落间是否完全没有衔接导致「拼接感」。
+
+【论证递进性 · 事实核对（必须遵守）】
+  · 在写 explanations.argumentProgression 之前，必须通读 Phase 3 中的「【引言】」「【主体段落】」「【结论】」与「终稿全文」。
+  · 若【引言】【结论】字段中确有实质性英文内容，禁止写「缺乏引言/结论」「没有 introduction/conclusion」类表述；应改为评价其功能强弱（是否点题、是否回扣主体、是否套路化）。
+  · 若主体段落中出现显性的段首衔接语（如 To begin with, Besides, Moreover, Furthermore, In addition, Meanwhile 等）或句间逻辑连接，禁止写「完全没有过渡」「无任何过渡句」；可改为评价过渡是否充分、是否生硬或仅依赖套话。
+  · 只有当在终稿中确实找不到可引用的引言/结论文字，或主体之间几乎无衔接、读者无法跟上论点推进时，才使用「缺乏过渡/引言结论薄弱/拼接感强」等较重表述，并在理由中引用 Phase 3 原文片段作为依据（勿臆测）。
+  · 「拼接感」指：缺乏必要篇章框架（引言/结论缺失或与主体严重脱节）、主体段几乎无衔接标记、或各段内部几乎未展开而像硬贴草稿。**不得**仅因采用「并列双论据」且主旨已预告并列、有过渡语、各段展开充分，就判定为拼凑或作为主要扣分理由。若降分，须具体指向①翻译感重、展开不足，②引言/结论功能薄弱，或③几乎读不出句间/段间衔接——而不是错误否认学生已写的内容。
+
+- 9-10分：中文观点被充分展开为英语论证段落（①）；终稿篇章结构完整（含并列式论证亦可），过渡与首尾呼应有效，整体可读、整合到位（②）
+- 6-8分：语言转化基本完成（①）；终稿有引言、主体与结论的基本框架，有过渡手段；可能深化不足或略显套路，但并列结构本身不单独构成扣分点（②）
+- 3-5分：语言转化勉强完成，草稿质量有限（①）；终稿虽有引言/结论等形式，但展开不足、过渡薄弱或引言结论与主体脱节，或几乎无衔接导致明显拼凑感（②）
+- 0-2分：Phase 2 草稿未能有效承接 Phase 1 的观点（①）；终稿严重缺乏篇章结构或可读衔接，各段独立、难以构成完整论证（②）
 
 3. 【语言自主性】(0-10分)
 评分依据：三个阶段的语言水平是否保持学生真实水平的一致性，无AI痕迹突变。
@@ -1358,11 +1391,14 @@ ${phase3Text}
 - 0-2分：终稿语言与原始观点风格完全不符，疑似大量AI替换
 
 4. 【观点拓展度】(0-10分)
-评分依据：终稿是否体现了对AI拓展建议（苏格拉底反馈、个性化思路拓展）的实质性借鉴与内化。
-- 9-10分：主动吸收AI建议，终稿在至少2个维度上出现实质性深化
-- 6-8分：部分吸收AI建议，终稿在1个维度上有可见深化
-- 4-5分：意识到AI建议的存在，但终稿未有效转化为内容增量
-- 0-3分：完全无视AI建议，终稿与原始观点的深度和广度无任何变化
+【观点拓展度 · 避免误判】
+观点拓展度评估的是「学生在选定方向上对 AI 建议的转化质量」，而非「是否采纳了 AI 的所有建议」。AI 的多维建议是拓展的可选路径，学生基于自身论证需求进行选择性吸收，属于正常的思维自主。评分应聚焦于：① 在采纳的维度上，终稿是否有实质性深化（如新增具体例证、分析角度、因果链条）；② 深化的质量是否超越了原始观点（Phase 1）的水平。**不因**学生未采纳 AI 的某一项或多项建议而扣分；评语中禁止将「未全盘接受 AI」作为降分理由。
+
+评分依据：对照 Phase 1 与 AI 在相应维度上曾给出的拓展线索，看学生**实际跟进的方向**上，终稿是否完成有效内化与内容增量。
+- 9-10分：在其选择深化的方向上，终稿相对 Phase 1 有明显超越（如多维度例证、更细因果或角度），转化扎实；未采纳的 AI 路径不影响得分
+- 6-8分：至少在一个论证方向上有可见深化，质量优于单纯重复 Phase 1，但深度或广度仍有限
+- 4-5分：与 AI 建议的对接薄弱，终稿几乎无超越 Phase 1 的实质增量，或仅有表面提及而无展开
+- 0-3分：终稿在内容与思辨深度上与 Phase 1 基本持平，看不出对拓展线索的有效转化（须在理由中对照 Phase 1/终稿具体说明，勿因未采纳某条 AI 建议而直接给低分）
 
 请以JSON格式输出评分，所有解释必须用中文，每项理由2-3句，结合具体文本依据。`;
 
