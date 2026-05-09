@@ -23,14 +23,29 @@ interface StudentProfilesTabProps {
     thinkingProcesses: any[];
     isLoading: boolean;
     selectedClass?: string;
+    /** 教师端合并后的班级列表（固定班 + 数据库已有 class_name） */
+    classOptions?: string[];
     onUpdateStudentClass?: (userId: string, className: string) => Promise<void>;
     onThinkingProcessCtrlSaved?: (processId: string, ctrlScore: CtrlScore) => void;
 }
 
 const StudentProfilesTab: React.FC<StudentProfilesTabProps> = ({
     students, essays, drills, scaffolds, thinkingProcesses, isLoading,
-    selectedClass = 'all', onUpdateStudentClass, onThinkingProcessCtrlSaved,
+    selectedClass = 'all', classOptions, onUpdateStudentClass, onThinkingProcessCtrlSaved,
 }) => {
+    const classSelectOptions = useMemo(() => {
+        const base = classOptions && classOptions.length > 0 ? classOptions : [...PREDEFINED_CLASSES];
+        const seen = new Set(base);
+        const out = [...base];
+        students.forEach((s: any) => {
+            const c = (s.class_name || '').trim();
+            if (c && !seen.has(c)) {
+                seen.add(c);
+                out.push(c);
+            }
+        });
+        return out;
+    }, [classOptions, students]);
     const [expandedId, setExpandedId] = useState<string | null>(null);
     const [sortKey, setSortKey] = useState<'name' | 'essays' | 'avg' | 'recent'>('recent');
     const [collapsedClasses, setCollapsedClasses] = useState<Set<string>>(new Set());
@@ -254,6 +269,9 @@ const StudentProfilesTab: React.FC<StudentProfilesTabProps> = ({
                 <td className="py-3 px-4 font-medium text-slate-800">
                     <span className="mr-2 text-slate-400">{expandedId === s.id ? '▼' : '▶'}</span>
                     {s.name}
+                    {s.role === 'external_student' && (
+                        <span className="ml-2 text-[10px] font-bold text-violet-600 bg-violet-50 border border-violet-100 px-1.5 py-0.5 rounded">外校</span>
+                    )}
                 </td>
                 <td className="py-3 px-4 text-slate-500 font-mono text-xs">{s.student_id}</td>
                 {showClass && (
@@ -274,7 +292,7 @@ const StudentProfilesTab: React.FC<StudentProfilesTabProps> = ({
                                 }}
                             >
                                 <option value="">— 未分班 —</option>
-                                {PREDEFINED_CLASSES.map(cls => (
+                                {classSelectOptions.map(cls => (
                                     <option key={cls} value={cls}>{cls}</option>
                                 ))}
                             </select>

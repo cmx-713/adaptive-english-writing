@@ -37,7 +37,20 @@ export const quickSignInSupabase = async (studentId: string, name: string, class
       .eq('student_id', studentId)
       .single()
 
+    if (findError && findError.code !== 'PGRST116') {
+      console.error('[Supabase] 查找用户失败:', findError)
+      return { data: null, error: findError }
+    }
+
     if (existingUser) {
+      // 名单校验仅针对普通学生，教师和外校用户不走此路径
+      if (existingUser.role === 'student') {
+        const targetClass = className || existingUser.class_name || undefined
+        if (targetClass) {
+          const ok = await matchStudentRosterForClass(targetClass, studentId, name)
+          if (!ok) return { data: null, error: ROSTER_DENIED_SCHOOL_ERROR }
+        }
+      }
       // 如果传入了 className 且与当前不同，则更新
       if (className && existingUser.class_name !== className) {
         await supabase
@@ -49,6 +62,13 @@ export const quickSignInSupabase = async (studentId: string, name: string, class
       return { data: existingUser, error: null }
     }
 
+    // 新用户默认为学生，做名单校验
+    const insertClass = className || null
+    if (insertClass) {
+      const ok = await matchStudentRosterForClass(insertClass, studentId, name)
+      if (!ok) return { data: null, error: ROSTER_DENIED_SCHOOL_ERROR }
+    }
+
     // 不存在则创建新用户
     const { data: newUser, error: insertError } = await supabase
       .from('wc_users')
@@ -57,7 +77,7 @@ export const quickSignInSupabase = async (studentId: string, name: string, class
         name,
         email: `${studentId}@student.local`,
         role: 'student',
-        class_name: className || null,
+        class_name: insertClass,
       })
       .select()
       .single()
@@ -85,30 +105,53 @@ export const quickSignInSupabase = async (studentId: string, name: string, class
 export const quickSignInExternal = async (
   studentId: string,
   name: string,
-  school: string
+  classLabel: string
 ) => {
   // 加 ext_ 前缀，避免与内部学生的 student_id 冲突（全局唯一约束）
   const externalId = `ext_${studentId}`
 
+  if (!classLabel.trim()) {
+    return { data: null, error: ROSTER_DENIED_EXTERNAL_ERROR }
+  }
+  const matchedRoster = await matchExternalRosterEntryByClass(classLabel, studentId, name)
+  if (!matchedRoster) {
+    return { data: null, error: ROSTER_DENIED_EXTERNAL_ERROR }
+  }
+  const rosterClass = norm(classLabel)
+  const rosterSchool = norm(matchedRoster.school)
+
   try {
     // 查找已存在的外校用户
-    const { data: existing } = await supabase
+    const { data: existing, error: findEx } = await supabase
       .from('wc_users')
       .select('*')
       .eq('student_id', externalId)
       .single()
 
+    if (findEx && findEx.code !== 'PGRST116') {
+      console.error('[Supabase] 查找外校用户失败:', findEx)
+      return { data: null, error: findEx }
+    }
+
     if (existing) {
-      // 学校信息为空或有变化时更新
-      if (school && existing.school !== school) {
+      if (rosterClass && existing.class_name !== rosterClass) {
+        const { error: clsErr } = await supabase
+          .from('wc_users')
+          .update({ class_name: rosterClass })
+          .eq('id', existing.id)
+        if (clsErr) console.error('[Supabase] 更新外校用户班级失败:', clsErr)
+        else existing.class_name = rosterClass
+      }
+      // 以名单中的学校信息为准（仅用于管理展示，不参与登录输入）
+      if (rosterSchool && existing.school !== rosterSchool) {
         const { error: updateError } = await supabase
           .from('wc_users')
-          .update({ school })
+          .update({ school: rosterSchool })
           .eq('id', existing.id)
         if (updateError) {
           console.error('[Supabase] 更新外校用户 school 失败:', updateError)
         } else {
-          existing.school = school
+          existing.school = rosterSchool
         }
       }
       return { data: existing, error: null }
@@ -120,9 +163,10 @@ export const quickSignInExternal = async (
       .insert({
         student_id: externalId,
         name,
-        school: school || null,
+        school: rosterSchool || null,
         email: `${externalId}@external.local`,
         role: 'external_student',
+        class_name: rosterClass,
       })
       .select()
       .single()
@@ -154,7 +198,7 @@ export const getBatchCtrlCandidates = async (
       .from('wc_users')
       .select('id, name, student_id')
       .eq('class_name', className)
-      .eq('role', 'student')
+      .in('role', ['student', 'external_student'])
 
     if (stuError || !students || students.length === 0) {
       return { data: [], error: stuError }
@@ -225,6 +269,201 @@ export const updateStudentClass = async (userId: string, className: string | nul
     console.error('[Supabase] 更新学生班级异常:', err)
     return { error: err }
   }
+}
+
+// ==========================================
+// 班级受邀名单（wc_class_roster）
+// ==========================================
+
+export const ROSTER_DENIED_SCHOOL_ERROR = {
+  code: 'ROSTER_DENIED' as const,
+  message: '您不在所选班级的名单中，请联系任课教师添加账号。',
+}
+
+export const ROSTER_DENIED_EXTERNAL_ERROR = {
+  code: 'ROSTER_DENIED' as const,
+  message: '您不在所选课程的受邀名单中，请确认学号、姓名及学校信息是否与教师导入的名单一致，或联系教师。',
+}
+
+/** @deprecated 保留兼容旧引用，统一用上方两个具名错误 */
+export const ROSTER_DENIED_ERROR = ROSTER_DENIED_SCHOOL_ERROR
+
+const norm = (s: string | null | undefined) => (s || '').trim()
+
+/**
+ * 获取名单中有效班级标签列表，供登录页班级下拉使用。
+ * 表不存在或查询失败时返回空数组（不阻断登录页渲染）。
+ */
+export const getActiveRosterClassLabels = async (
+  roleKind: 'external_student' | 'student'
+): Promise<string[]> => {
+  try {
+    const { data, error } = await supabase
+      .from('wc_class_roster')
+      .select('class_label')
+      .eq('is_active', true)
+      .eq('role_kind', roleKind)
+    if (error || !data) return []
+    const seen = new Set<string>()
+    const result: string[] = []
+    for (const row of data) {
+      if (row.class_label && !seen.has(row.class_label)) {
+        seen.add(row.class_label)
+        result.push(row.class_label)
+      }
+    }
+    return result.sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  } catch {
+    return []
+  }
+}
+
+/** 统计某类受邀记录条数（内部工具函数） */
+const countActiveRosterByRole = async (
+  roleKind: 'external_student' | 'student',
+  classLabel?: string
+) => {
+  try {
+    let q = supabase
+      .from('wc_class_roster')
+      .select('id', { count: 'exact', head: true })
+      .eq('is_active', true)
+      .eq('role_kind', roleKind)
+    if (classLabel) q = q.eq('class_label', classLabel)
+    const { count, error } = await q
+    if (error) return { count: 0, error: null }
+    return { count: count ?? 0, error: null }
+  } catch {
+    return { count: 0, error: null }
+  }
+}
+
+/**
+ * 本校学生：指定班级内严格校验学号+姓名。
+ * 无论该班级是否有名单记录，一律强制校验——无记录即视为未被授权。
+ */
+export const matchStudentRosterForClass = async (
+  classLabel: string,
+  plainId: string,
+  fullName: string
+): Promise<boolean> => {
+  try {
+    const { data, error } = await supabase
+      .from('wc_class_roster')
+      .select('id')
+      .eq('is_active', true)
+      .eq('role_kind', 'student')
+      .eq('class_label', classLabel)
+      .eq('student_plain_id', norm(plainId))
+      .eq('full_name', norm(fullName))
+      .limit(1)
+    if (error) return false
+    return !!(data && data.length > 0)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 外校学生：在指定班级（class_label）内校验学号+姓名；
+ * 若名单行填了 school，还须与登录填写的 school 匹配。
+ */
+export const matchExternalRosterEntryByClass = async (
+  classLabel: string,
+  plainId: string,
+  fullName: string
+): Promise<any | null> => {
+  try {
+    const { data, error } = await supabase
+      .from('wc_class_roster')
+      .select('*')
+      .eq('is_active', true)
+      .eq('role_kind', 'external_student')
+      .eq('class_label', classLabel)
+      .eq('student_plain_id', norm(plainId))
+    if (error || !data?.length) return null
+    const sn = norm(fullName)
+    const row = data.find((r: any) => norm(r.full_name) === sn)
+    return row || null
+  } catch {
+    return null
+  }
+}
+
+/** @deprecated 旧全局外校校验，由 matchExternalRosterEntryByClass 替代 */
+export const matchExternalRosterEntry = async (
+  plainId: string,
+  fullName: string,
+  school: string
+): Promise<{ row: any | null; enforcement: boolean }> => {
+  const { count } = await countActiveRosterByRole('external_student')
+  const enforcement = count > 0
+  if (!enforcement) return { row: null, enforcement: false }
+  try {
+    const { data, error } = await supabase
+      .from('wc_class_roster')
+      .select('*')
+      .eq('is_active', true)
+      .eq('role_kind', 'external_student')
+      .eq('student_plain_id', norm(plainId))
+    if (error || !data?.length) return { row: null, enforcement: true }
+    const sn = norm(fullName)
+    const sc = norm(school)
+    const row = data.find((r: any) => {
+      if (norm(r.full_name) !== sn) return false
+      const rs = norm(r.school)
+      if (rs && rs !== sc) return false
+      return true
+    })
+    return { row: row || null, enforcement: true }
+  } catch {
+    return { row: null, enforcement: true }
+  }
+}
+
+export const getAllRosterEntries = async (limit: number = 5000) => {
+  const { data, error } = await supabase
+    .from('wc_class_roster')
+    .select('*')
+    .order('class_label', { ascending: true })
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  return { data, error }
+}
+
+export type RosterRowInput = {
+  class_label: string
+  student_plain_id: string
+  full_name: string
+  school?: string | null
+  role_kind: 'external_student' | 'student'
+}
+
+export const upsertRosterRows = async (rows: RosterRowInput[]) => {
+  if (rows.length === 0) return { data: null as any, error: null }
+  const { data, error } = await supabase
+    .from('wc_class_roster')
+    .upsert(
+      rows.map((r) => ({
+        class_label: norm(r.class_label),
+        student_plain_id: norm(r.student_plain_id),
+        full_name: norm(r.full_name),
+        school: r.school != null && norm(r.school) ? norm(r.school) : null,
+        role_kind: r.role_kind,
+        is_active: true,
+      })),
+      { onConflict: 'class_label,student_plain_id' }
+    )
+    .select()
+  return { data, error }
+}
+
+export const deleteRosterEntry = async (id: string) => {
+  return supabase.from('wc_class_roster').delete().eq('id', id)
+}
+
+export const setRosterEntryActive = async (id: string, is_active: boolean) => {
+  return supabase.from('wc_class_roster').update({ is_active }).eq('id', id)
 }
 
 // ==========================================
@@ -545,7 +784,7 @@ export const getAllStudents = async () => {
   const { data, error } = await supabase
     .from('wc_users')
     .select('*')
-    .eq('role', 'student')
+    .in('role', ['student', 'external_student'])
     .order('created_at', { ascending: false })
 
   return { data, error }

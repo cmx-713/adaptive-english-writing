@@ -12,6 +12,17 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { User, ApiConfig, Tab } from './types';
 import { quickSignInSupabase, quickSignInExternal } from './services/supabaseDataService';
 
+function isRosterDenied(err: unknown): err is { code: string; message: string } {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code: string }).code === 'ROSTER_DENIED' &&
+    'message' in err &&
+    typeof (err as { message: unknown }).message === 'string'
+  );
+}
+
 const DEFAULT_CONFIG: ApiConfig = {
   provider: 'google',
   apiKey: '', // Will fall back to env var if empty in service
@@ -70,7 +81,12 @@ const App: React.FC = () => {
             setUser(parsed);
           } else {
             // 旧格式用户：补充 Supabase id
-            const { data } = await quickSignInSupabase(parsed.studentId, parsed.name, parsed.className);
+            const { data, error: restoreErr } = await quickSignInSupabase(parsed.studentId, parsed.name, parsed.className);
+            if (isRosterDenied(restoreErr) || restoreErr || !data) {
+              localStorage.removeItem('cet_student_user');
+              setIsLoadingUser(false);
+              return;
+            }
             const enrichedUser: User = {
               ...parsed,
               id: data?.id || undefined,
@@ -104,27 +120,38 @@ const App: React.FC = () => {
   const handleLogin = async (newUser: User) => {
     // 外校用户：quickSignInExternal（与内部学生逻辑一致，无需 Supabase Auth）
     if (newUser.role === 'external_student') {
-      const { data, error } = await quickSignInExternal(newUser.studentId, newUser.name, newUser.school || '');
+      const { data, error } = await quickSignInExternal(
+        newUser.studentId,
+        newUser.name,
+        newUser.className || ''
+      );
       if (error) {
-        // 数据库写入失败（如 school 列不存在），抛出错误让 LoginScreen 显示提示
+        if (isRosterDenied(error)) throw new Error(error.message);
         throw new Error('登录失败，请联系管理员（数据库配置异常）');
       }
+      if (!data) throw new Error('登录失败，请稍后重试。');
       const enrichedUser: User = {
         ...newUser,
-        id: data?.id || undefined,
-        school: data?.school || newUser.school || undefined,
+        id: data.id,
+        school: data.school || newUser.school || undefined,
+        className: data.class_name || newUser.className,
       };
       localStorage.setItem('cet_student_user', JSON.stringify(enrichedUser));
       setUser(enrichedUser);
       return;
     }
     // 班级学生 / 教师：原有快速登录逻辑，不变
-    const { data } = await quickSignInSupabase(newUser.studentId, newUser.name, newUser.className);
+    const { data, error } = await quickSignInSupabase(newUser.studentId, newUser.name, newUser.className);
+    if (error) {
+      if (isRosterDenied(error)) throw new Error(error.message);
+      throw new Error('登录失败，请联系管理员（数据库配置异常）');
+    }
+    if (!data) throw new Error('登录失败，请稍后重试。');
     const enrichedUser: User = {
       ...newUser,
-      id: data?.id || undefined,
-      role: data?.role || 'student',
-      className: newUser.className || data?.class_name || undefined,
+      id: data.id,
+      role: data.role || 'student',
+      className: newUser.className || data.class_name || undefined,
     };
     localStorage.setItem('cet_student_user', JSON.stringify(enrichedUser));
     setUser(enrichedUser);
@@ -186,7 +213,7 @@ const App: React.FC = () => {
               C
             </div>
             <h1 className="font-serif font-bold text-2xl text-slate-800 tracking-tight hidden md:block">
-              CET-4/6 <span className="text-slate-500 text-lg">Coach</span>
+              审辨写作训练
             </h1>
           </div>
 
@@ -338,7 +365,7 @@ const App: React.FC = () => {
       {/* Global Footer */}
       <footer className="border-t border-slate-200 bg-white py-8 mt-auto no-print">
         <div className="max-w-4xl mx-auto px-4 text-center text-slate-400 text-sm">
-          <p>© {new Date().getFullYear()} CET-4/6 Writing Platform. Powered by {apiConfig.provider === 'google' ? 'Google Gemini' : apiConfig.provider} AI.</p>
+          <p>© {new Date().getFullYear()} 审辨写作训练系统. Powered by {apiConfig.provider === 'google' ? 'Google Gemini' : apiConfig.provider} AI.</p>
         </div>
       </footer>
     </div>

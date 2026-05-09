@@ -3,15 +3,36 @@ import { User } from '../types';
 import {
     getAllStudents, getAllEssayGrades, getAllDrillHistory,
     getAllScaffoldHistory, getAgentUsageSummary, getAllThinkingProcesses,
-    updateStudentClass, getExternalUsers, getBatchCtrlCandidates, saveCtrlScore,
+    updateStudentClass, getExternalUsers, getBatchCtrlCandidates, saveCtrlScore, getActiveRosterClassLabels,
 } from '../services/supabaseDataService';
 import { analyzeCtrlScore, CtrlScore } from '../services/geminiService';
+
+/** 本校固定班顺序 + 数据库已有 class_name（含外校虚拟班等），去重排序 */
+function mergeTeacherClassOptions(predefined: string[], allUsers: any[]): string[] {
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+    for (const c of predefined) {
+        const t = (c || '').trim();
+        if (t && !seen.has(t)) {
+            seen.add(t);
+            ordered.push(t);
+        }
+    }
+    const extras = new Set<string>();
+    for (const s of allUsers) {
+        const c = (s?.class_name || '').trim();
+        if (c && !seen.has(c)) extras.add(c);
+    }
+    const sortedExtras = [...extras].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    return [...ordered, ...sortedExtras];
+}
+
 // 批量审辨信度生成 Modal
 const BatchCtrlModal: React.FC<{
     onClose: () => void;
     onCtrlSaved?: (processId: string, ctrlScore: CtrlScore) => void;
-}> = ({ onClose, onCtrlSaved }) => {
-    const CLASSES = ['2024级A甲6', '2024级A乙6', '2025级A甲2', '2025级A乙2'];
+    classOptions: string[];
+}> = ({ onClose, onCtrlSaved, classOptions }) => {
     const [selectedClass, setSelectedClass] = useState('');
     const [includeReanalyze, setIncludeReanalyze] = useState(false);
     const [candidates, setCandidates] = useState<any[]>([]);
@@ -91,26 +112,26 @@ const BatchCtrlModal: React.FC<{
     const pct = candidates.length > 0 ? Math.round((progress / candidates.length) * 100) : 0;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md mx-4 overflow-hidden">
-                <div className="bg-[#1e2d4a] text-white px-6 py-4 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35">
+            <div className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-md mx-4 overflow-hidden">
+                <div className="px-6 py-4 flex items-center justify-between border-b border-slate-200 bg-slate-50/60">
                     <div>
-                        <h2 className="font-bold text-lg">批量生成历史审辨信度</h2>
-                        <p className="text-white/60 text-xs mt-0.5">支持仅补缺，或按新量规覆盖重算已有分数</p>
+                        <h2 className="font-bold text-lg text-slate-800">批量生成历史审辨信度</h2>
+                        <p className="text-slate-500 text-xs mt-0.5">支持仅补缺，或按新量规覆盖重算已有分数</p>
                     </div>
-                    <button onClick={onClose} disabled={running} className="text-white/60 hover:text-white text-xl disabled:opacity-30">✕</button>
+                    <button onClick={onClose} disabled={running} className="text-slate-400 hover:text-slate-700 text-xl disabled:opacity-30">✕</button>
                 </div>
 
                 <div className="p-6 space-y-5">
                     {/* 班级选择 */}
                     <div>
                         <p className="text-sm font-bold text-slate-600 mb-2">选择班级</p>
-                        <div className="grid grid-cols-2 gap-2">
-                            {CLASSES.map(cls => (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-52 overflow-y-auto pr-1">
+                            {classOptions.map(cls => (
                                 <button key={cls}
                                     onClick={() => handleSelectClass(cls)}
                                     disabled={running}
-                                    className={`py-2.5 px-3 rounded-xl text-sm font-medium border transition-all text-left ${selectedClass === cls ? 'bg-[#1e2d4a] text-white border-[#1e2d4a]' : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300'}`}>
+                                    className={`py-2.5 px-3 rounded-lg text-sm font-medium border transition-all text-left break-words ${selectedClass === cls ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300'}`}>
                                     {cls}
                                 </button>
                             ))}
@@ -142,7 +163,7 @@ const BatchCtrlModal: React.FC<{
                             ) : candidates.length > 0 ? (
                                 <div className="text-sm font-medium text-amber-800 space-y-1">
                                     <p>
-                                        📋 {selectedClass} 共 <strong>{candidates.length}</strong> 条记录将参与批量分析
+                                        {selectedClass} 共 <strong>{candidates.length}</strong> 条记录将参与批量分析
                                         {includeReanalyze ? '（含已有分数，将重算覆盖）' : '（仅此前未分析）'}
                                     </p>
                                 </div>
@@ -150,7 +171,7 @@ const BatchCtrlModal: React.FC<{
                                 <p className="text-sm font-medium text-slate-600">该班暂无已完成「组合成文」的思维训练记录。</p>
                             ) : (
                                 <div className="text-sm font-medium text-emerald-700 space-y-1">
-                                    <p>✅ {selectedClass} 在「仅补缺」模式下暂无待分析记录（均已有过审辨信度）。</p>
+                                    <p>{selectedClass} 在「仅补缺」模式下暂无待分析记录（均已有过审辨信度）。</p>
                                     <p className="text-xs font-normal text-emerald-800/90">若需按新评分标准重算，请勾选上方「包含已有审辨信度」后重新统计。</p>
                                 </div>
                             )}
@@ -165,12 +186,12 @@ const BatchCtrlModal: React.FC<{
                                 <span>{pct}%</span>
                             </div>
                             <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                                <div className={`h-full rounded-full transition-all duration-500 ${finished ? 'bg-emerald-500' : 'bg-[#1e2d4a]'}`}
+                                <div className={`h-full rounded-full transition-all duration-500 ${finished ? 'bg-slate-700' : 'bg-slate-900'}`}
                                     style={{ width: `${pct}%` }} />
                             </div>
                             {finished && (
                                 <p className="text-xs text-slate-500 mt-2 text-center">
-                                    ✅ 成功 {done} 条 {failed > 0 ? `· ⚠️ 失败 ${failed} 条` : ''}
+                                    成功 {done} 条 {failed > 0 ? `· 失败 ${failed} 条` : ''}
                                 </p>
                             )}
                         </div>
@@ -181,24 +202,24 @@ const BatchCtrlModal: React.FC<{
                         {!running && !finished && (
                             <button onClick={handleStart}
                                 disabled={candidates.length === 0 || loadingCandidates}
-                                className="flex-1 py-3 rounded-xl font-bold text-white bg-[#1e2d4a] hover:bg-[#162240] disabled:opacity-40 disabled:cursor-not-allowed transition-all">
-                                🚀 开始批量分析
+                                className="flex-1 py-3 rounded-lg font-bold text-white bg-slate-900 hover:bg-black disabled:opacity-40 disabled:cursor-not-allowed transition-all">
+                                开始批量分析
                             </button>
                         )}
                         {running && (
                             <button onClick={handleStop}
-                                className="flex-1 py-3 rounded-xl font-bold text-rose-600 bg-rose-50 border border-rose-200 hover:bg-rose-100 transition-all">
-                                ⏹ 停止
+                                className="flex-1 py-3 rounded-lg font-bold text-slate-700 bg-slate-100 border border-slate-200 hover:bg-slate-200 transition-all">
+                                停止
                             </button>
                         )}
                         {finished && (
                             <button onClick={onClose}
-                                className="flex-1 py-3 rounded-xl font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-all">
+                                className="flex-1 py-3 rounded-lg font-bold text-white bg-slate-900 hover:bg-black transition-all">
                                 完成，关闭
                             </button>
                         )}
                         {!running && !finished && (
-                            <button onClick={onClose} className="px-5 py-3 rounded-xl text-slate-500 hover:bg-slate-100 transition-all">取消</button>
+                            <button onClick={onClose} className="px-5 py-3 rounded-lg text-slate-500 hover:bg-slate-100 transition-all">取消</button>
                         )}
                     </div>
 
@@ -220,7 +241,7 @@ const ExternalUsersTab: React.FC<{ users: any[]; isLoading: boolean }> = ({ user
         <div className="space-y-5 animate-fade-in-up">
             <div className="flex items-center justify-between gap-4">
                 <div>
-                    <h2 className="text-xl font-bold text-slate-800">🌐 外校注册用户</h2>
+                    <h2 className="text-xl font-bold text-slate-800">外校注册用户</h2>
                     <p className="text-sm text-slate-500 mt-0.5">共 <strong>{users.length}</strong> 位外校用户注册，仅可使用学生端功能，无法访问教师后台。</p>
                 </div>
                 <input type="text" value={search} onChange={e => setSearch(e.target.value)}
@@ -268,8 +289,9 @@ import AnalyticsTab from './teacher/AnalyticsTab';
 import StudentProfilesTab from './teacher/StudentProfilesTab';
 import EssayGalleryTab from './teacher/EssayGalleryTab';
 import UsageTab from './teacher/UsageTab';
+import RosterTab from './teacher/RosterTab';
 
-type TeacherTab = 'overview' | 'analytics' | 'students' | 'essays' | 'usage' | 'external';
+type TeacherTab = 'overview' | 'analytics' | 'students' | 'essays' | 'usage' | 'external' | 'roster';
 
 interface TeacherDashboardProps {
     user: User;
@@ -286,12 +308,13 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
     const [usageLogs, setUsageLogs] = useState<any[]>([]);
     const [thinkingProcesses, setThinkingProcesses] = useState<any[]>([]);
     const [externalUsers, setExternalUsers] = useState<any[]>([]);
+    const [rosterClassLabels, setRosterClassLabels] = useState<string[]>([]);
 
     useEffect(() => {
         const fetchAll = async () => {
             setIsLoading(true);
             try {
-                const [studentsRes, essaysRes, drillsRes, scaffoldsRes, usageRes, thinkingRes, externalRes] = await Promise.all([
+                const [studentsRes, essaysRes, drillsRes, scaffoldsRes, usageRes, thinkingRes, externalRes, rosterStudentClasses, rosterExternalClasses] = await Promise.all([
                     getAllStudents(),
                     getAllEssayGrades(500),
                     getAllDrillHistory(500),
@@ -299,6 +322,8 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                     getAgentUsageSummary(),
                     getAllThinkingProcesses(500),
                     getExternalUsers(),
+                    getActiveRosterClassLabels('student'),
+                    getActiveRosterClassLabels('external_student'),
                 ]);
                 setStudents(studentsRes.data || []);
                 setEssays(essaysRes.data || []);
@@ -307,6 +332,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                 setUsageLogs(usageRes.data || []);
                 setThinkingProcesses(thinkingRes.data || []);
                 setExternalUsers(externalRes.data || []);
+                setRosterClassLabels([...new Set([...(rosterStudentClasses || []), ...(rosterExternalClasses || [])])]);
             } catch (err) {
                 console.error('[Teacher] 数据加载失败:', err);
             } finally {
@@ -319,8 +345,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
     // 班级过滤
     const [selectedClass, setSelectedClass] = useState<string>('all');
 
-    // 固定使用预定义班级列表，不依赖数据库动态提取
-    const classList = PREDEFINED_CLASSES;
+    const classList = useMemo(() => {
+        // 把名单里的班级也并入下拉，避免“刚导入未登录”时无法在导出中选择
+        const rosterAsUsers = rosterClassLabels.map((c) => ({ class_name: c }));
+        return mergeTeacherClassOptions(PREDEFINED_CLASSES, [...students, ...rosterAsUsers]);
+    }, [students, rosterClassLabels]);
 
     // 教师在后台直接为学生分配班级
     const handleUpdateStudentClass = async (userId: string, className: string) => {
@@ -493,28 +522,29 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
     const [showExportMenu, setShowExportMenu] = useState(false);
     const [showBatchCtrl, setShowBatchCtrl] = useState(false);
 
-    const tabs: { key: TeacherTab; label: string; icon: string }[] = [
-        { key: 'overview', label: '教学概览', icon: '📊' },
-        { key: 'analytics', label: '学情分析', icon: '📈' },
-        { key: 'students', label: '学生档案', icon: '👤' },
-        { key: 'essays', label: '作文详情', icon: '📝' },
-        { key: 'usage', label: '使用统计', icon: '🔥' },
-        { key: 'external', label: '外校用户', icon: '🌐' },
+    const tabs: { key: TeacherTab; label: string }[] = [
+        { key: 'overview', label: '教学概览' },
+        { key: 'analytics', label: '学情分析' },
+        { key: 'students', label: '学生档案' },
+        { key: 'essays', label: '作文详情' },
+        { key: 'usage', label: '使用统计' },
+        { key: 'roster', label: '受邀名单' },
+        { key: 'external', label: '外校用户' },
     ];
 
     return (
-        <div className="min-h-screen bg-slate-50 font-sans">
+        <div className="min-h-screen bg-slate-100/40 font-sans">
             {/* Header */}
-            <header className="bg-[#1e2d4a] text-white sticky top-0 z-50 shadow-lg">
+            <header className="bg-white/95 backdrop-blur sticky top-0 z-50 border-b border-slate-200">
                 <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
                     {/* Logo */}
                     <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center font-serif font-bold text-lg backdrop-blur-sm">
+                        <div className="w-8 h-8 bg-slate-900 text-white rounded-lg flex items-center justify-center font-serif font-bold text-lg">
                             C
                         </div>
                         <div>
-                            <h1 className="font-serif font-bold text-lg tracking-tight">
-                                CET Coach <span className="text-white/60 text-sm font-normal">教师端</span>
+                            <h1 className="font-serif font-bold text-lg tracking-tight text-slate-900">
+                                审辨写作训练 <span className="text-slate-500 text-sm font-normal">教师端</span>
                             </h1>
                         </div>
                     </div>
@@ -522,12 +552,12 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                     {/* User */}
                     <div className="flex items-center gap-4">
                         <div className="text-right">
-                            <div className="text-sm font-bold">{user.name}</div>
-                            <div className="text-[10px] text-white/50">教师</div>
+                            <div className="text-sm font-bold text-slate-800">{user.name}</div>
+                            <div className="text-[10px] text-slate-400">教师</div>
                         </div>
                         <button
                             onClick={onLogout}
-                            className="px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded-lg transition-colors font-medium"
+                            className="px-3 py-1.5 text-xs text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors font-medium border border-slate-200"
                         >
                             退出
                         </button>
@@ -541,12 +571,12 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                             <button
                                 key={tab.key}
                                 onClick={() => setActiveTab(tab.key)}
-                                className={`px-5 py-3 text-sm font-bold whitespace-nowrap transition-all border-b-2 ${activeTab === tab.key
-                                    ? 'border-white text-white'
-                                    : 'border-transparent text-white/50 hover:text-white/80 hover:border-white/30'
+                                className={`px-5 py-3 text-sm font-semibold whitespace-nowrap transition-all border-b-2 ${activeTab === tab.key
+                                    ? 'border-slate-900 text-slate-900'
+                                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
                                     }`}
                             >
-                                {tab.icon} {tab.label}
+                                {tab.label}
                             </button>
                         ))}
                     </nav>
@@ -554,10 +584,10 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
             </header>
 
             {/* Content */}
-            <main className="max-w-7xl mx-auto px-4 py-8">
+            <main className="max-w-7xl mx-auto px-4 py-6">
 
                 {/* 当前班级 Banner */}
-                <div className="mb-6 flex items-center gap-4 px-5 py-3 bg-white rounded-2xl border border-slate-200 shadow-sm flex-wrap">
+                <div className="mb-6 flex items-center gap-4 px-4 py-3 bg-white rounded-xl border border-slate-200 flex-wrap">
 
                     {/* 班级下拉 */}
                     <div className="flex items-center gap-2">
@@ -595,18 +625,18 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                         {/* 批量审辨信度 */}
                         <button
                             onClick={() => setShowBatchCtrl(true)}
-                            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-bold bg-purple-500 text-white hover:bg-purple-600 transition-all shadow-sm whitespace-nowrap"
+                            className="text-xs px-3 py-1.5 rounded-lg font-bold bg-slate-900 text-white hover:bg-black transition-all shadow-sm whitespace-nowrap"
                         >
-                            🔍 批量审辨信度
+                            批量审辨信度
                         </button>
 
                         {/* 导出数据 */}
                         <div className="relative">
                             <button
                                 onClick={() => setShowExportMenu(v => !v)}
-                                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-all shadow-sm whitespace-nowrap"
+                                className="text-xs px-3 py-1.5 rounded-lg font-bold bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 transition-all shadow-sm whitespace-nowrap"
                             >
-                                📥 导出数据 ▾
+                                导出数据 ▾
                             </button>
                             {showExportMenu && (
                                 <>
@@ -614,11 +644,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                                     <div className="absolute right-0 top-9 z-20 bg-white rounded-xl shadow-lg border border-slate-200 py-1 min-w-[160px]">
                                         <button onClick={() => { exportStudentSummary(); setShowExportMenu(false); }}
                                             className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 font-medium">
-                                            👥 学生学习汇总
+                                            学生学习汇总
                                         </button>
                                         <button onClick={() => { exportCtrlScores(); setShowExportMenu(false); }}
                                             className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 font-medium">
-                                            🔍 审辨信度汇总
+                                            审辨信度汇总
                                         </button>
                                     </div>
                                 </>
@@ -647,6 +677,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                         thinkingProcesses={filtered.thinkingProcesses}
                         isLoading={isLoading}
                         selectedClass={selectedClass}
+                        classOptions={classList}
                         onUpdateStudentClass={handleUpdateStudentClass}
                         onThinkingProcessCtrlSaved={handleThinkingProcessCtrlSaved}
                     />
@@ -656,6 +687,9 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                 )}
                 {activeTab === 'usage' && (
                     <UsageTab essays={filtered.essays} drills={filtered.drills} scaffolds={filtered.scaffolds} usageLogs={filtered.usageLogs} isLoading={isLoading} />
+                )}
+                {activeTab === 'roster' && (
+                    <RosterTab classOptions={classList} />
                 )}
                 {activeTab === 'external' && (
                     <ExternalUsersTab users={externalUsers} isLoading={isLoading} />
@@ -667,13 +701,14 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                 <BatchCtrlModal
                     onClose={() => setShowBatchCtrl(false)}
                     onCtrlSaved={handleThinkingProcessCtrlSaved}
+                    classOptions={classList}
                 />
             )}
 
             {/* Footer */}
             <footer className="border-t border-slate-200 py-6 text-center">
                 <p className="text-[10px] text-slate-300 uppercase tracking-widest font-bold">
-                    Adaptive English Writing Coach — Teacher Dashboard
+                    审辨写作训练系统 — 教师端
                 </p>
             </footer>
         </div>
