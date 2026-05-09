@@ -140,10 +140,15 @@ export const quickSignInExternal = async (
 }
 
 /**
- * 批量审辨信度：查询指定班级中有组合成文但尚无 ctrl_score 的思维过程记录
+ * 批量审辨信度：查询指定班级中已有组合成文的思维过程记录
+ * @param includeExistingCtrl 为 true 时包含已有 ctrl_score 的记录（用于量规更新后按新标准重算）
  */
-export const getBatchCtrlCandidates = async (className: string) => {
+export const getBatchCtrlCandidates = async (
+  className: string,
+  options?: { includeExistingCtrl?: boolean }
+) => {
   try {
+    const includeExistingCtrl = options?.includeExistingCtrl === true
     // Step 1: 获取该班所有学生 ID
     const { data: students, error: stuError } = await supabase
       .from('wc_users')
@@ -159,14 +164,22 @@ export const getBatchCtrlCandidates = async (className: string) => {
     const studentMap: Record<string, any> = {}
     students.forEach((s: any) => { studentMap[s.id] = s })
 
-    // Step 2: 查询有 assembled_essay 但无 ctrl_score 的记录
-    const { data: processes, error: procError } = await supabase
+    // Step 2: 有 assembled_essay；默认仅尚无 ctrl_score；可选包含已有分数以便重算
+    let procQuery = supabase
       .from('wc_thinking_process')
-      .select('id, topic, user_ideas, validation_results, personalized_expansions, dimension_drafts, assembled_essay, inspiration_cards, user_id')
+      .select(
+        'id, topic, user_ideas, validation_results, personalized_expansions, dimension_drafts, assembled_essay, inspiration_cards, user_id, ctrl_score'
+      )
       .in('user_id', studentIds)
       .not('assembled_essay', 'is', null)
-      .is('ctrl_score', null)
-      .order('created_at', { ascending: false })
+
+    if (!includeExistingCtrl) {
+      procQuery = procQuery.is('ctrl_score', null)
+    }
+
+    const { data: processes, error: procError } = await procQuery.order('created_at', {
+      ascending: false,
+    })
 
     if (procError) return { data: [], error: procError }
 

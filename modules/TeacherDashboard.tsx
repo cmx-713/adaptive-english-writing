@@ -13,6 +13,7 @@ const BatchCtrlModal: React.FC<{
 }> = ({ onClose, onCtrlSaved }) => {
     const CLASSES = ['2024级A甲6', '2024级A乙6', '2025级A甲2', '2025级A乙2'];
     const [selectedClass, setSelectedClass] = useState('');
+    const [includeReanalyze, setIncludeReanalyze] = useState(false);
     const [candidates, setCandidates] = useState<any[]>([]);
     const [loadingCandidates, setLoadingCandidates] = useState(false);
     const [running, setRunning] = useState(false);
@@ -22,16 +23,26 @@ const BatchCtrlModal: React.FC<{
     const [finished, setFinished] = useState(false);
     const abortRef = useState({ cancelled: false })[0];
 
-    const handleSelectClass = async (cls: string) => {
+    useEffect(() => {
+        if (!selectedClass) {
+            setCandidates([]);
+            return;
+        }
+        let cancelled = false;
+        setLoadingCandidates(true);
+        getBatchCtrlCandidates(selectedClass, { includeExistingCtrl: includeReanalyze }).then(({ data }) => {
+            if (!cancelled) {
+                setCandidates(data || []);
+                setLoadingCandidates(false);
+            }
+        });
+        return () => { cancelled = true; };
+    }, [selectedClass, includeReanalyze]);
+
+    const handleSelectClass = (cls: string) => {
         setSelectedClass(cls);
-        setCandidates([]);
         setFinished(false);
         setProgress(0);
-        if (!cls) return;
-        setLoadingCandidates(true);
-        const { data } = await getBatchCtrlCandidates(cls);
-        setCandidates(data || []);
-        setLoadingCandidates(false);
     };
 
     const handleStart = async () => {
@@ -55,7 +66,12 @@ const BatchCtrlModal: React.FC<{
                     dimensionDrafts: rec.dimension_drafts || {},
                     assembledEssay: rec.assembled_essay,
                 });
-                const payload = { ...result, source: 'auto' as const, reviewed: false };
+                const prev = rec.ctrl_score as { source?: string; reviewed?: boolean } | null | undefined;
+                const payload = {
+                    ...result,
+                    source: (prev?.source === 'teacher_manual' ? 'teacher_manual' : 'auto') as 'auto' | 'teacher_manual',
+                    reviewed: prev?.reviewed === true,
+                };
                 const { error: saveErr } = await saveCtrlScore(rec.id, payload);
                 if (!saveErr) onCtrlSaved?.(rec.id, payload);
                 setDone(d => d + 1);
@@ -80,7 +96,7 @@ const BatchCtrlModal: React.FC<{
                 <div className="bg-[#1e2d4a] text-white px-6 py-4 flex items-center justify-between">
                     <div>
                         <h2 className="font-bold text-lg">批量生成历史审辨信度</h2>
-                        <p className="text-white/60 text-xs mt-0.5">对已完成组合成文但尚未分析的记录批量生成</p>
+                        <p className="text-white/60 text-xs mt-0.5">支持仅补缺，或按新量规覆盖重算已有分数</p>
                     </div>
                     <button onClick={onClose} disabled={running} className="text-white/60 hover:text-white text-xl disabled:opacity-30">✕</button>
                 </div>
@@ -101,6 +117,20 @@ const BatchCtrlModal: React.FC<{
                         </div>
                     </div>
 
+                    <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer select-none ${running ? 'opacity-50 pointer-events-none' : 'bg-slate-50 border-slate-200 hover:border-slate-300'}`}>
+                        <input
+                            type="checkbox"
+                            className="mt-0.5 rounded border-slate-300 text-[#1e2d4a] focus:ring-[#1e2d4a]"
+                            checked={includeReanalyze}
+                            onChange={(e) => setIncludeReanalyze(e.target.checked)}
+                            disabled={running}
+                        />
+                        <span className="text-sm text-slate-700 leading-snug">
+                            <span className="font-bold text-slate-800">包含已有审辨信度</span>
+                            <span className="text-slate-500">（量规更新后按新标准重新批量打分，将覆盖当前分数与评语；「教师已复核」标记会保留）</span>
+                        </span>
+                    </label>
+
                     {/* 待分析记录数 */}
                     {selectedClass && (
                         <div className={`rounded-xl p-4 border ${loadingCandidates ? 'bg-slate-50 border-slate-200' : candidates.length > 0 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
@@ -110,11 +140,19 @@ const BatchCtrlModal: React.FC<{
                                     正在统计待分析记录...
                                 </p>
                             ) : candidates.length > 0 ? (
-                                <p className="text-sm font-medium text-amber-800">
-                                    📋 {selectedClass} 共有 <strong>{candidates.length}</strong> 条记录待分析
-                                </p>
+                                <div className="text-sm font-medium text-amber-800 space-y-1">
+                                    <p>
+                                        📋 {selectedClass} 共 <strong>{candidates.length}</strong> 条记录将参与批量分析
+                                        {includeReanalyze ? '（含已有分数，将重算覆盖）' : '（仅此前未分析）'}
+                                    </p>
+                                </div>
+                            ) : includeReanalyze ? (
+                                <p className="text-sm font-medium text-slate-600">该班暂无已完成「组合成文」的思维训练记录。</p>
                             ) : (
-                                <p className="text-sm font-medium text-emerald-700">✅ {selectedClass} 所有记录均已分析</p>
+                                <div className="text-sm font-medium text-emerald-700 space-y-1">
+                                    <p>✅ {selectedClass} 在「仅补缺」模式下暂无待分析记录（均已有过审辨信度）。</p>
+                                    <p className="text-xs font-normal text-emerald-800/90">若需按新评分标准重算，请勾选上方「包含已有审辨信度」后重新统计。</p>
+                                </div>
                             )}
                         </div>
                     )}
