@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { getAllLearningStats, LearningStats, getHistory, getAggregatedUserVocab, getAggregatedUserCollocations, getAggregatedUserErrors } from '../services/storageService';
 import { HistoryItem, ScaffoldContent, EssayHistoryData, AggregatedError, CritiqueCategory, EssayGradeResult, Tab, VocabularyItem } from '../types';
 import ResultsDisplay from '../components/ResultsDisplay';
@@ -233,29 +233,42 @@ const RadarChart: React.FC<{
   current: EssayGradeResult['subScores'];
   average: EssayGradeResult['subScores'];
 }> = ({ current, average }) => {
+  const [hoveredAxis, setHoveredAxis] = useState<number | null>(null);
+  const hoverLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearHoverLeaveTimer = () => {
+    if (hoverLeaveTimerRef.current != null) {
+      clearTimeout(hoverLeaveTimerRef.current);
+      hoverLeaveTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => () => clearHoverLeaveTimer(), []);
+
   const size = 240;
   const center = size / 2;
   const radius = 80;
 
+  const axes = [
+    { label: '内容与思辨', key: 'content' as const, angle: -90, max: 4 },
+    { label: '组织与逻辑', key: 'organization' as const, angle: 0, max: 3 },
+    { label: '语言纯熟度', key: 'proficiency' as const, angle: 90, max: 5 },
+    { label: '表达清晰度', key: 'clarity' as const, angle: 180, max: 3 },
+  ];
+
   const toPercent = (scores: EssayGradeResult['subScores']) => ({
-    content: (scores.content || 0) / 4 * 100,
-    organization: (scores.organization || 0) / 3 * 100,
-    proficiency: (scores.proficiency || 0) / 5 * 100,
-    clarity: (scores.clarity || 0) / 3 * 100,
+    content: ((scores.content || 0) / 4) * 100,
+    organization: ((scores.organization || 0) / 3) * 100,
+    proficiency: ((scores.proficiency || 0) / 5) * 100,
+    clarity: ((scores.clarity || 0) / 3) * 100,
   });
 
   const currentP = toPercent(current);
   const averageP = toPercent(average);
 
-  const axes = [
-    { label: '内容与思辨', key: 'content', angle: -90 },
-    { label: '组织与逻辑', key: 'organization', angle: 0 },
-    { label: '语言纯熟度', key: 'proficiency', angle: 90 },
-    { label: '表达清晰度', key: 'clarity', angle: 180 },
-  ];
-
-  const getCoordinates = (value: number, angleDeg: number) => {
-    const ratio = Math.max(0, Math.min(1, value / 100));
+  /** valuePercent: 沿轴方向占半径的比例（0–100 钳制在圆内；>100 用于轴外标签） */
+  const getCoordinates = (valuePercent: number, angleDeg: number, clamp = true) => {
+    const ratio = clamp ? Math.max(0, Math.min(1, valuePercent / 100)) : valuePercent / 100;
     const angleRad = (angleDeg * Math.PI) / 180;
     return {
       x: center + radius * ratio * Math.cos(angleRad),
@@ -263,12 +276,14 @@ const RadarChart: React.FC<{
     };
   };
 
-  const buildPath = (data: any) => {
-    return axes.map((axis) => {
-      const val = data[axis.key] || 0;
-      const { x, y } = getCoordinates(val, axis.angle);
-      return `${x},${y}`;
-    }).join(' ');
+  const buildPath = (data: Record<string, number>) => {
+    return axes
+      .map((axis) => {
+        const val = data[axis.key] || 0;
+        const { x, y } = getCoordinates(val, axis.angle);
+        return `${x},${y}`;
+      })
+      .join(' ');
   };
 
   return (
@@ -285,10 +300,99 @@ const RadarChart: React.FC<{
           <polygon points={buildPath(averageP)} fill="rgba(148, 163, 184, 0.2)" stroke="#94a3b8" strokeWidth="2" strokeDasharray="4 2" />
           <polygon points={buildPath(currentP)} fill="rgba(59, 130, 246, 0.4)" stroke="#3b82f6" strokeWidth="2" className="animate-fade-in-up drop-shadow-sm" />
           {axes.map((axis, i) => {
-            const labelPos = getCoordinates(125, axis.angle);
+            const labelPos = getCoordinates(118, axis.angle, false);
+            const avg = (average as any)[axis.key] ?? 0;
             return (
-              <g key={i}>
-                <text x={labelPos.x} y={labelPos.y} textAnchor="middle" dominantBaseline="middle" className="text-[10px] font-bold fill-slate-500 tracking-wide">{axis.label}</text>
+              <g key={`lbl-${i}`}>
+                <text
+                  x={labelPos.x}
+                  y={labelPos.y}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  className="text-[10px] font-bold fill-slate-500 tracking-wide"
+                >
+                  {axis.label}
+                </text>
+                <text
+                  x={labelPos.x}
+                  y={labelPos.y + 11}
+                  textAnchor="middle"
+                  fontSize="8"
+                  fill="#94a3b8"
+                  fontWeight="600"
+                  style={{ fontFamily: 'ui-sans-serif, system-ui, sans-serif' }}
+                >
+                  均 {Number(avg).toFixed(1)}/{axis.max}
+                </text>
+              </g>
+            );
+          })}
+          {/* 顶点悬停：显示本次得分/满分（透明热区置于最上层） */}
+          {axes.map((axis, i) => {
+            const pt = getCoordinates(currentP[axis.key], axis.angle);
+            const cur = Number((current as any)[axis.key] ?? 0).toFixed(1);
+            const dx = center - pt.x;
+            const dy = center - pt.y;
+            const len = Math.hypot(dx, dy) || 1;
+            const tipX = pt.x + (dx / len) * 34;
+            const tipY = pt.y + (dy / len) * 34;
+            const tw = 108;
+            const th = 42;
+            return (
+              <g key={`hit-${i}`}>
+                <circle
+                  cx={pt.x}
+                  cy={pt.y}
+                  r={24}
+                  fill="transparent"
+                  stroke="none"
+                  className="cursor-pointer"
+                  onMouseEnter={() => {
+                    clearHoverLeaveTimer();
+                    setHoveredAxis(i);
+                  }}
+                  onMouseLeave={() => {
+                    clearHoverLeaveTimer();
+                    hoverLeaveTimerRef.current = setTimeout(() => setHoveredAxis(null), 200);
+                  }}
+                />
+                {hoveredAxis === i && (
+                  <g pointerEvents="none">
+                    <rect
+                      x={tipX - tw / 2}
+                      y={tipY - th / 2}
+                      width={tw}
+                      height={th}
+                      rx={8}
+                      fill="#0f172a"
+                      fillOpacity={0.94}
+                      stroke="#334155"
+                      strokeWidth="1"
+                    />
+                    <text
+                      x={tipX}
+                      y={tipY - 5}
+                      textAnchor="middle"
+                      fontSize="10"
+                      fontWeight="700"
+                      fill="#f8fafc"
+                      style={{ fontFamily: 'ui-sans-serif, system-ui, sans-serif' }}
+                    >
+                      {axis.label}
+                    </text>
+                    <text
+                      x={tipX}
+                      y={tipY + 11}
+                      textAnchor="middle"
+                      fontSize="11"
+                      fontWeight="700"
+                      fill="#93c5fd"
+                      style={{ fontFamily: 'ui-sans-serif, system-ui, sans-serif' }}
+                    >
+                      本次 {cur} / {axis.max}
+                    </text>
+                  </g>
+                )}
               </g>
             );
           })}
@@ -298,6 +402,9 @@ const RadarChart: React.FC<{
         <div className="flex items-center gap-1"><span className="w-3 h-3 bg-blue-500/40 border border-blue-500 rounded-sm"></span><span className="text-slate-700">本次</span></div>
         <div className="flex items-center gap-1"><span className="w-3 h-3 bg-slate-400/20 border border-slate-400 border-dashed rounded-sm"></span><span className="text-slate-500">平均</span></div>
       </div>
+      <p className="text-[9px] text-slate-400 mt-1 text-center leading-tight px-1">
+        鼠标移到蓝色图形各顶点附近可查看本次得分与满分；轴标下方灰色为你历次作文在该维度的平均分
+      </p>
     </div>
   );
 };
