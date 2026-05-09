@@ -5,6 +5,37 @@ import ResultsDisplay from '../components/ResultsDisplay';
 import GradingReport from '../components/GradingReport';
 import { getThinkingProcessByUser } from '../services/supabaseDataService';
 
+/** 学习中心展示用：与 Supabase ctrl_score JSON 对齐的宽松类型（避免依赖 LLM 运行时模块） */
+interface CtrlScoreStudentView {
+  opinionConsistency?: number;
+  argumentProgression?: number;
+  linguisticAutonomy?: number;
+  thoughtExpansion?: number;
+  total?: number;
+  explanations?: Partial<Record<'opinionConsistency' | 'argumentProgression' | 'linguisticAutonomy' | 'thoughtExpansion', string>>;
+  overallComment?: string;
+  analyzedAt?: string;
+}
+
+interface CtrlHistoryEntry {
+  score: number;
+  topic: string;
+  date: string;
+  detail: CtrlScoreStudentView | null;
+}
+
+const CTRL_DIMS_STUDENT: readonly {
+  key: keyof Pick<CtrlScoreStudentView, 'opinionConsistency' | 'argumentProgression' | 'linguisticAutonomy' | 'thoughtExpansion'>;
+  label: string;
+  weight: number;
+  color: string;
+}[] = [
+  { key: 'opinionConsistency', label: '观点一致性', weight: 25, color: '#3b82f6' },
+  { key: 'argumentProgression', label: '论证递进性', weight: 30, color: '#10b981' },
+  { key: 'linguisticAutonomy', label: '语言自主性', weight: 25, color: '#f59e0b' },
+  { key: 'thoughtExpansion', label: '观点拓展度', weight: 20, color: '#8b5cf6' },
+];
+
 interface ProfileCenterProps {
   isActive: boolean;
   onNavigate: (path: string) => void;
@@ -372,7 +403,8 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
   const [pendingTrainingCategory, setPendingTrainingCategory] = useState<CritiqueCategory | null>(null); // 🆕 待训练的维度
   const [showAllHistory, setShowAllHistory] = useState(false);
   const [activeVaultTab, setActiveVaultTab] = useState<'vocabulary' | 'collocations'>('vocabulary');
-  const [ctrlHistory, setCtrlHistory] = useState<{ score: number; topic: string; date: string }[]>([]);
+  const [ctrlHistory, setCtrlHistory] = useState<CtrlHistoryEntry[]>([]);
+  const [showCtrlDimensions, setShowCtrlDimensions] = useState(false);
 
   // Computed Logic
   const errorStats = useMemo(() => {
@@ -640,14 +672,18 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
         if (user?.id) {
           getThinkingProcessByUser(user.id).then(({ data }) => {
             if (!data) return;
-            const scored = data
+            const scored: CtrlHistoryEntry[] = data
               .filter((p: any) => p.ctrl_score?.total != null)
               .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-              .map((p: any) => ({
-                score: p.ctrl_score.total,
-                topic: p.topic || '',
-                date: p.ctrl_score.analyzedAt || p.created_at,
-              }));
+              .map((p: any) => {
+                const cs = p.ctrl_score as CtrlScoreStudentView;
+                return {
+                  score: cs.total as number,
+                  topic: p.topic || '',
+                  date: cs.analyzedAt || p.created_at,
+                  detail: cs && typeof cs === 'object' ? cs : null,
+                };
+              });
             setCtrlHistory(scored);
           }).catch(() => { /* 静默处理，不影响现有功能 */ });
         }
@@ -900,6 +936,73 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                       })()}
                     </>
                   )}
+
+                  {/* 总体评语：学生端直接可见（基于最近一次已分析的训練） */}
+                  {(() => {
+                    const latest = ctrlHistory[ctrlHistory.length - 1];
+                    const comment = latest?.detail?.overallComment?.trim();
+                    if (!comment) return null;
+                    return (
+                      <div className="mt-4 pt-3 border-t border-slate-100">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase mb-1.5">总体评语</p>
+                        <p className="text-xs text-slate-600 leading-relaxed">{comment}</p>
+                      </div>
+                    );
+                  })()}
+
+                  {/* 四维明细：折叠展开，对齐教师端维度权重与配色 */}
+                  {(() => {
+                    const latest = ctrlHistory[ctrlHistory.length - 1];
+                    const d = latest?.detail;
+                    if (!d) return null;
+                    return (
+                      <div className="mt-3">
+                        <button
+                          type="button"
+                          onClick={() => setShowCtrlDimensions(!showCtrlDimensions)}
+                          className="w-full flex items-center justify-between px-3 py-2 bg-purple-50/80 hover:bg-purple-50 border border-purple-100 rounded-lg transition-colors text-xs font-bold text-purple-800"
+                        >
+                          <span>📊 {showCtrlDimensions ? '收起' : '展开'}四维得分与要点</span>
+                          <span className={`transform transition-transform ${showCtrlDimensions ? 'rotate-180' : ''}`}>▼</span>
+                        </button>
+                        {showCtrlDimensions && (
+                          <div className="mt-2 p-3 bg-slate-50/80 border border-slate-100 rounded-xl space-y-3 animate-fade-in-up">
+                            <p className="text-[10px] text-slate-400">
+                              以下为你最近一次思维训练（{latest.topic?.slice(0, 24)}{latest.topic && latest.topic.length > 24 ? '…' : ''}）的参考反馈；各维度满分 10 分。
+                            </p>
+                            {CTRL_DIMS_STUDENT.map(({ key, label, weight, color }) => {
+                              const val = typeof d[key] === 'number' ? d[key] as number : 0;
+                              const expl = d.explanations?.[key]?.trim() || '';
+                              return (
+                                <div key={key}>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                      <span className="text-xs font-bold text-slate-700 truncate">{label}</span>
+                                      <span className="text-[10px] text-slate-400 flex-shrink-0">×{weight}%</span>
+                                    </div>
+                                    <span className="text-sm font-bold flex-shrink-0 ml-2" style={{ color }}>
+                                      {val.toFixed(1)}
+                                    </span>
+                                  </div>
+                                  <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden mb-1.5">
+                                    <div
+                                      className="h-full rounded-full transition-all duration-500"
+                                      style={{ width: `${Math.max(0, Math.min(100, (val / 10) * 100))}%`, backgroundColor: color }}
+                                    />
+                                  </div>
+                                  {expl ? (
+                                    <p className="text-[11px] text-slate-600 leading-relaxed">{expl}</p>
+                                  ) : (
+                                    <p className="text-[11px] text-slate-400 italic">暂无该维度文字说明</p>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>
