@@ -3,7 +3,7 @@ import { getAllLearningStats, LearningStats, getHistory, getAggregatedUserVocab,
 import { HistoryItem, ScaffoldContent, EssayHistoryData, AggregatedError, CritiqueCategory, EssayGradeResult, Tab, VocabularyItem } from '../types';
 import ResultsDisplay from '../components/ResultsDisplay';
 import GradingReport from '../components/GradingReport';
-import { getThinkingProcessByUser } from '../services/supabaseDataService';
+import { getThinkingProcessByUser, getEssayGradesByUser } from '../services/supabaseDataService';
 
 /** 学习中心展示用：与 Supabase ctrl_score JSON 对齐的宽松类型（避免依赖 LLM 运行时模块） */
 interface CtrlScoreStudentView {
@@ -405,6 +405,8 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
   const [activeVaultTab, setActiveVaultTab] = useState<'vocabulary' | 'collocations'>('vocabulary');
   const [ctrlHistory, setCtrlHistory] = useState<CtrlHistoryEntry[]>([]);
   const [showCtrlDimensions, setShowCtrlDimensions] = useState(false);
+  /** 云端作文分数（时间升序），用于本地历史不足 2 条时仍显示「写作成长对比」 */
+  const [remoteEssayScores, setRemoteEssayScores] = useState<{ created_at: string; total_score: number }[]>([]);
 
   // Computed Logic
   const errorStats = useMemo(() => {
@@ -448,6 +450,21 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
       return [];
     }
   }, [historyItems]);
+
+  /** 首次 vs 最新写作分数：优先本地批改历史；不足 2 条时用 Supabase wc_essay_grades */
+  const writingGrowthComparison = useMemo(() => {
+    if (essayHistory.length >= 2) {
+      const firstScore = (essayHistory[0].data as EssayHistoryData)?.result?.totalScore ?? 0;
+      const latestScore = (essayHistory[essayHistory.length - 1].data as EssayHistoryData)?.result?.totalScore ?? 0;
+      return { firstScore, latestScore, count: essayHistory.length, source: 'local' as const };
+    }
+    if (remoteEssayScores.length >= 2) {
+      const firstScore = remoteEssayScores[0].total_score;
+      const latestScore = remoteEssayScores[remoteEssayScores.length - 1].total_score;
+      return { firstScore, latestScore, count: remoteEssayScores.length, source: 'remote' as const };
+    }
+    return null;
+  }, [essayHistory, remoteEssayScores]);
 
   // 获取最近的5次作文用于趋势图
   const recentEssays = essayHistory.slice(-5);
@@ -670,25 +687,48 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
       if (saved) {
         const user = JSON.parse(saved);
         if (user?.id) {
-          getThinkingProcessByUser(user.id).then(({ data }) => {
-            if (!data) return;
-            const scored: CtrlHistoryEntry[] = data
-              .filter((p: any) => p.ctrl_score?.total != null)
-              .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-              .map((p: any) => {
-                const cs = p.ctrl_score as CtrlScoreStudentView;
-                return {
-                  score: cs.total as number,
-                  topic: p.topic || '',
-                  date: cs.analyzedAt || p.created_at,
-                  detail: cs && typeof cs === 'object' ? cs : null,
-                };
-              });
-            setCtrlHistory(scored);
-          }).catch(() => { /* 静默处理，不影响现有功能 */ });
+          Promise.all([
+            getThinkingProcessByUser(user.id),
+            getEssayGradesByUser(user.id),
+          ]).then(([tpRes, essayRes]) => {
+            const data = tpRes.data;
+            if (data) {
+              const scored: CtrlHistoryEntry[] = data
+                .filter((p: any) => p.ctrl_score?.total != null)
+                .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+                .map((p: any) => {
+                  const cs = p.ctrl_score as CtrlScoreStudentView;
+                  return {
+                    score: cs.total as number,
+                    topic: p.topic || '',
+                    date: cs.analyzedAt || p.created_at,
+                    detail: cs && typeof cs === 'object' ? cs : null,
+                  };
+                });
+              setCtrlHistory(scored);
+            } else {
+              setCtrlHistory([]);
+            }
+            const rows = essayRes.data || [];
+            const sorted = [...rows]
+              .filter((e: any) => typeof e?.total_score === 'number')
+              .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+            setRemoteEssayScores(
+              sorted.map((e: any) => ({ created_at: e.created_at, total_score: e.total_score }))
+            );
+          }).catch(() => {
+            setCtrlHistory([]);
+            setRemoteEssayScores([]);
+          });
+        } else {
+          setRemoteEssayScores([]);
         }
+      } else {
+        setRemoteEssayScores([]);
       }
-    } catch { /* ignore */ }
+    } catch {
+      setRemoteEssayScores([]);
+    }
   }, [isActive, refreshData]);
 
   useEffect(() => {
@@ -852,13 +892,12 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
           </div>
 
           {/* 2.5 成长对比 + 审辨信度趋势 */}
-          {(essayHistory.length >= 2 || ctrlHistory.length >= 1) && (
+          {(writingGrowthComparison != null || ctrlHistory.length >= 1) && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
 
-              {/* 首次 vs 最新对比卡 */}
-              {essayHistory.length >= 2 && (() => {
-                const firstScore = (essayHistory[0].data as EssayHistoryData)?.result?.totalScore ?? 0;
-                const latestScore = (essayHistory[essayHistory.length - 1].data as EssayHistoryData)?.result?.totalScore ?? 0;
+              {/* 首次 vs 最新对比卡（本地历史 ≥2 或云端 ≥2 条作文批改） */}
+              {writingGrowthComparison && (() => {
+                const { firstScore, latestScore, count } = writingGrowthComparison;
                 const delta = +(latestScore - firstScore).toFixed(1);
                 const improved = delta > 0;
                 const stable = delta === 0;
@@ -875,7 +914,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                         你的写作分数从 <span className="text-xl font-serif">{firstScore}</span> {improved ? '提升到' : stable ? '保持在' : '变化到'} <span className="text-xl font-serif">{latestScore}</span> 分
                       </p>
                       <p className={`text-sm mt-0.5 ${improved ? 'text-emerald-600' : stable ? 'text-slate-500' : 'text-rose-600'}`}>
-                        {improved ? `↑ 进步了 +${delta} 分，共完成 ${essayHistory.length} 次批改` : stable ? `→ 保持稳定，共完成 ${essayHistory.length} 次批改` : `↓ 差距 ${delta} 分，继续加油！共完成 ${essayHistory.length} 次`}
+                        {improved ? `↑ 进步了 +${delta} 分，共完成 ${count} 次批改` : stable ? `→ 保持稳定，共完成 ${count} 次批改` : `↓ 差距 ${delta} 分，继续加油！共完成 ${count} 次`}
                       </p>
                     </div>
                   </div>
