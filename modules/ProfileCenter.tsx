@@ -4,6 +4,7 @@ import { HistoryItem, ScaffoldContent, EssayHistoryData, AggregatedError, Critiq
 import ResultsDisplay from '../components/ResultsDisplay';
 import GradingReport from '../components/GradingReport';
 import { getThinkingProcessByUser, getEssayGradesByUser } from '../services/supabaseDataService';
+import { computeMilestones } from '../services/milestones';
 
 /** 学习中心展示用：与 Supabase ctrl_score JSON 对齐的宽松类型（避免依赖 LLM 运行时模块） */
 interface CtrlScoreStudentView {
@@ -466,6 +467,33 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
     return null;
   }, [essayHistory, remoteEssayScores]);
 
+  /** 作文历史最高分：合并本地批改与云端 wc_essay_grades，供里程碑判定 */
+  const essayMaxScore = useMemo(() => {
+    let max = 0;
+    essayHistory.forEach((item) => {
+      const s = (item.data as EssayHistoryData)?.result?.totalScore;
+      if (typeof s === 'number' && !Number.isNaN(s)) max = Math.max(max, s);
+    });
+    remoteEssayScores.forEach((e) => {
+      if (typeof e.total_score === 'number' && !Number.isNaN(e.total_score)) {
+        max = Math.max(max, e.total_score);
+      }
+    });
+    return max;
+  }, [essayHistory, remoteEssayScores]);
+
+  const milestoneStates = useMemo(
+    () =>
+      computeMilestones({
+        socraticCount: stats.socraticCount,
+        graderCount: stats.graderCount,
+        drillCount: stats.drillCount,
+        essayMaxScore,
+        ctrlAnalyzedCount: ctrlHistory.length,
+      }),
+    [stats.socraticCount, stats.graderCount, stats.drillCount, essayMaxScore, ctrlHistory.length]
+  );
+
   // 获取最近的5次作文用于趋势图
   const recentEssays = essayHistory.slice(-5);
   const latestEssayData = essayHistory.length > 0
@@ -810,6 +838,35 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
             <StatCard icon="🧠" label="思维训练" value={stats.socraticCount} colorClass="bg-blue-50 text-blue-800" desc="Topics Explored" />
             <StatCard icon="✍️" label="作文批改" value={stats.graderCount} colorClass="bg-blue-50 text-blue-800" desc="Essays Graded" />
             <StatCard icon="🏋️" label="句子特训" value={stats.drillCount} colorClass="bg-blue-50 text-blue-800" desc="Skills Mastered" />
+          </div>
+
+          {/* 1.5 学习里程碑徽章（纯展示，不改变任何业务逻辑） */}
+          <div className="mb-8 rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-lg" aria-hidden>🏅</span>
+              <h3 className="font-bold text-slate-800 text-sm">学习里程碑</h3>
+              <span className="text-[10px] text-slate-400 uppercase tracking-wider">Milestones</span>
+            </div>
+            <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+              达成条件后自动点亮；悬停可查看说明。数据来自本机学习记录与（若已登录）云端作文与审辨信度。
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {milestoneStates.map((m) => (
+                <div
+                  key={m.id}
+                  title={m.description}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border transition-shadow cursor-default select-none ${
+                    m.unlocked
+                      ? 'bg-amber-50 text-amber-900 border-amber-200 shadow-sm'
+                      : 'bg-slate-50 text-slate-400 border-slate-200 border-dashed opacity-80'
+                  }`}
+                >
+                  <span aria-hidden>{m.icon}</span>
+                  <span>{m.label}</span>
+                  {m.unlocked ? <span className="text-[10px]">✓</span> : <span className="text-[10px] text-slate-300">···</span>}
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* 2. Progress Tracking (Charts) */}
