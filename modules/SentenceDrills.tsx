@@ -1,5 +1,5 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { DrillMode, DrillItem, DrillHistoryData } from '../types';
 import { fetchDrillItems } from '../services/geminiService';
 import { getAggregatedUserErrors, getAggregatedUserVocab, saveToHistory } from '../services/storageService';
@@ -34,6 +34,26 @@ interface SentenceDrillsProps {
   supabaseUserId?: string;
 }
 
+// pending drill 来自学习中心"去训练"的上下文
+interface PendingDrillConfig {
+  mode: DrillMode;
+  category: string;
+  errors: string[];
+  launchedAt: number;
+}
+
+const DRILL_MODE_LABEL: Record<string, string> = {
+  grammar_doctor: '语法门诊',
+  elevation_lab: '表达升格',
+  structure_architect: '句式工坊',
+};
+
+const CATEGORY_LABEL: Record<string, string> = {
+  Proficiency: '语言纯熟度',
+  Clarity: '表达清晰度',
+  Organization: '组织与逻辑',
+};
+
 const SentenceDrills: React.FC<SentenceDrillsProps> = ({ supabaseUserId }) => {
   const [activeMode, setActiveMode] = useState<DrillMode | null>(null);
   const [topic, setTopic] = useState('');
@@ -44,14 +64,72 @@ const SentenceDrills: React.FC<SentenceDrillsProps> = ({ supabaseUserId }) => {
   const [isCurrentAnswered, setIsCurrentAnswered] = useState(false);
   const [sessionComplete, setSessionComplete] = useState(false);
   const [adaptiveSource, setAdaptiveSource] = useState<string | null>(null);
+  const [pendingConfig, setPendingConfig] = useState<PendingDrillConfig | null>(null);
 
   // 会话计时
   const sessionStartRef = useRef<number>(Date.now());
 
-  const startSession = async (mode: DrillMode) => {
+  // 挂载时检测是否有来自学习中心的针对性训练请求
+  useEffect(() => {
+    const raw = localStorage.getItem('cet_pending_drill');
+    if (!raw) return;
+    try {
+      const config = JSON.parse(raw) as PendingDrillConfig;
+      // 超过 5 分钟视为过期，忽略
+      if (Date.now() - config.launchedAt > 5 * 60 * 1000) {
+        localStorage.removeItem('cet_pending_drill');
+        return;
+      }
+      localStorage.removeItem('cet_pending_drill');
+      setPendingConfig(config);
+      // 自动启动对应模式
+      startSessionWithConfig(config);
+    } catch {
+      localStorage.removeItem('cet_pending_drill');
+    }
+  }, []);
+
+  const startSessionWithConfig = async (config: PendingDrillConfig) => {
+    const mode = config.mode as DrillMode;
     setActiveMode(mode);
     setIsLoading(true);
-    sessionStartRef.current = Date.now(); // 重置会话计时
+    sessionStartRef.current = Date.now();
+    setItems([]);
+    setScore(0);
+    setCurrentIndex(0);
+    setSessionComplete(false);
+    setIsCurrentAnswered(false);
+
+    const label = CATEGORY_LABEL[config.category] || config.category;
+    const errCount = config.errors.length;
+    setAdaptiveSource(
+      errCount > 0
+        ? `针对你的 ${label} 问题（${errCount} 处错误）专项训练`
+        : `针对 ${label} 的专项训练`
+    );
+
+    const adaptiveContext = {
+      pastErrors: config.errors.length > 0 ? config.errors : getAggregatedUserErrors(8).map(e => e.original),
+      targetVocab: getAggregatedUserVocab(8).map(v => v.word),
+    };
+
+    try {
+      const drillItems = await fetchDrillItems('Academic English Writing', mode, adaptiveContext);
+      setItems(drillItems);
+    } catch (e) {
+      console.error(e);
+      alert("题目加载失败，请重试。");
+      setActiveMode(null);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const startSession = async (mode: DrillMode) => {
+    setPendingConfig(null);
+    setActiveMode(mode);
+    setIsLoading(true);
+    sessionStartRef.current = Date.now();
     setItems([]);
     setScore(0);
     setCurrentIndex(0);
@@ -59,14 +137,11 @@ const SentenceDrills: React.FC<SentenceDrillsProps> = ({ supabaseUserId }) => {
     setIsCurrentAnswered(false);
     setAdaptiveSource(null);
 
-    // --- Prepare Adaptive Data ---
-    // Update: Map AggregatedError objects to simple strings for the drill generator context
     const adaptiveContext = {
       pastErrors: getAggregatedUserErrors(8).map(e => e.original),
-      targetVocab: getAggregatedUserVocab(8).map(v => v.word), // Extract word strings
+      targetVocab: getAggregatedUserVocab(8).map(v => v.word),
     };
 
-    // Determine if we are using adaptive data or generic
     if (mode === 'grammar_doctor' && adaptiveContext.pastErrors.length > 0) {
       setAdaptiveSource(`基于你过去的 ${adaptiveContext.pastErrors.length} 个高频错题`);
     } else if (mode === 'elevation_lab' && adaptiveContext.targetVocab.length > 0) {
@@ -150,21 +225,32 @@ const SentenceDrills: React.FC<SentenceDrillsProps> = ({ supabaseUserId }) => {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 px-4">
-          {MODES.map(mode => (
-            <button
-              key={mode.id}
-              onClick={() => startSession(mode.id)}
-              className="group relative bg-white rounded-2xl p-6 shadow-md hover:shadow-xl border border-slate-100 transition-all hover:-translate-y-1 text-left overflow-hidden"
-            >
-              <div className={`absolute top-0 left-0 w-full h-1 bg-gradient-to-r ${mode.color}`}></div>
-              <div className="text-4xl mb-4 group-hover:scale-110 transition-transform duration-300 inline-block">{mode.icon}</div>
-              <h3 className="text-xl font-bold text-slate-800 mb-2">{mode.label}</h3>
-              <p className="text-slate-500 text-sm leading-relaxed">{mode.desc}</p>
-              <div className="mt-6 flex items-center text-sm font-bold text-blue-900 opacity-0 group-hover:opacity-100 transition-opacity">
-                开始训练 →
-              </div>
-            </button>
-          ))}
+          {MODES.map(mode => {
+            const isRecommended = pendingConfig?.mode === mode.id;
+            return (
+              <button
+                key={mode.id}
+                onClick={() => startSession(mode.id)}
+                className={`group relative bg-white rounded-2xl p-6 shadow-md hover:shadow-xl border transition-all hover:-translate-y-1 text-left overflow-hidden ${isRecommended ? 'border-blue-400 ring-2 ring-blue-200' : 'border-slate-100'}`}
+              >
+                {isRecommended && (
+                  <div className="absolute top-3 right-3 px-2 py-0.5 bg-blue-600 text-white text-[10px] font-bold rounded-full">推荐</div>
+                )}
+                <div className={`absolute top-0 left-0 w-full h-1 bg-gradient-to-r ${mode.color}`}></div>
+                <div className="text-4xl mb-4 group-hover:scale-110 transition-transform duration-300 inline-block">{mode.icon}</div>
+                <h3 className="text-xl font-bold text-slate-800 mb-2">{mode.label}</h3>
+                <p className="text-slate-500 text-sm leading-relaxed">{mode.desc}</p>
+                {isRecommended && pendingConfig && pendingConfig.errors.length > 0 && (
+                  <p className="mt-2 text-xs text-blue-600 font-medium">
+                    已加载你的 {pendingConfig.errors.length} 处{CATEGORY_LABEL[pendingConfig.category] || pendingConfig.category}问题
+                  </p>
+                )}
+                <div className="mt-6 flex items-center text-sm font-bold text-blue-900 opacity-0 group-hover:opacity-100 transition-opacity">
+                  开始训练 →
+                </div>
+              </button>
+            );
+          })}
         </div>
 
         <div className="text-center mt-12 text-xs text-slate-400">

@@ -6,7 +6,7 @@ import ResultsDisplay from '../components/ResultsDisplay';
 import HistoryModal from '../components/HistoryModal';
 import { fetchInspirationCards, fetchLanguageScaffolds, generateEssayIntroConclusion, analyzeCtrlScore } from '../services/geminiService';
 import { getHistory, deleteFromHistory, saveToHistory, checkIsSaved } from '../services/storageService';
-import { saveScaffoldToSupabase, saveInspirationToSupabase, updateScaffoldDraft, saveAssembledEssayToSupabase, logAgentUsage, createThinkingProcess, updateThinkingProcess, saveCtrlScore, upsertVocabularyBank } from '../services/supabaseDataService';
+import { saveScaffoldToSupabase, saveInspirationToSupabase, updateScaffoldDraft, saveAssembledEssayToSupabase, logAgentUsage, createThinkingProcess, updateThinkingProcess, saveCtrlScore, upsertVocabularyBank, upsertCollocationBank } from '../services/supabaseDataService';
 import { UserInput, InspirationCard, ScaffoldContent, FlowState, HistoryItem, InspirationHistoryData, DimensionDraft } from '../types';
 import { IdeaValidationResult } from '../services/geminiService';
 
@@ -162,6 +162,10 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
         // 词汇银行：自动将本次 scaffold 词汇入库
         if (result.vocabulary && result.vocabulary.length > 0) {
           upsertVocabularyBank(supabaseUserId, result.vocabulary, currentTopic).catch(() => { });
+        }
+        // 搭配银行：自动将本次 scaffold 地道搭配入库
+        if (result.collocations && result.collocations.length > 0) {
+          upsertCollocationBank(supabaseUserId, result.collocations, currentTopic).catch(() => { });
         }
       }
       // 同步维度草稿数据到思维过程记录

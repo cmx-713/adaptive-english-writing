@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { getAllLearningStats, LearningStats, getHistory, getAggregatedUserCollocations, getAggregatedUserErrors } from '../services/storageService';
+import { getAllLearningStats, LearningStats, getHistory, getAggregatedUserErrors, getAggregatedUserCollocations, getAggregatedUserVocab } from '../services/storageService';
 import { HistoryItem, ScaffoldContent, EssayHistoryData, AggregatedError, CritiqueCategory, EssayGradeResult, Tab } from '../types';
 import ResultsDisplay from '../components/ResultsDisplay';
 import GradingReport from '../components/GradingReport';
-import { getThinkingProcessByUser, getEssayGradesByUser, getVocabularyBank, deleteVocabBankEntry, VocabBankEntry } from '../services/supabaseDataService';
+import { getThinkingProcessByUser, getEssayGradesByUser, getVocabularyBank, deleteVocabBankEntry, VocabBankEntry, upsertVocabularyBank, getCollocationBank, deleteCollocationBankEntry, CollocationBankEntry, upsertCollocationBank } from '../services/supabaseDataService';
 import { computeMilestones } from '../services/milestones';
 
 /** 学习中心展示用：与 Supabase ctrl_score JSON 对齐的宽松类型（避免依赖 LLM 运行时模块） */
@@ -451,7 +451,8 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
   // State
   const [stats, setStats] = useState<LearningStats>({ socraticCount: 0, graderCount: 0, drillCount: 0 });
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
-  const [recentCollocations, setRecentCollocations] = useState<{ en: string; zh: string; topic: string; date: string }[]>([]);
+  const [recentCollocations, setRecentCollocations] = useState<CollocationBankEntry[]>([]);
+  const [collocationBankLoading, setCollocationBankLoading] = useState(false);
   const [recentErrors, setRecentErrors] = useState<AggregatedError[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewingItem, setViewingItem] = useState<HistoryItem | null>(null);
@@ -719,15 +720,36 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
     setVocabBank(prev => prev.filter(v => v.id !== entryId));
   };
 
+  // 维度 → 特训模式映射
+  const CATEGORY_TO_DRILL_MODE: Partial<Record<CritiqueCategory, string>> = {
+    Proficiency: 'grammar_doctor',
+    Clarity: 'elevation_lab',
+    Organization: 'structure_architect',
+  };
+
   const handleConfirmTraining = () => {
     setShowTrainingPreview(false);
-    // 根据维度类型跳转到对应模块
     if (pendingTrainingCategory === 'Content') {
-      onNavigate('/coach'); // Content → 思维训练
-    } else {
-      onNavigate('/drills'); // Organization/Proficiency/Clarity → 句子特训
+      onNavigate('/coach');
+      return;
     }
-    // TODO: 未来可以在这里传递训练配置参数到对应模块
+    // 过滤出该维度的错题原句，传递给特训
+    const drillMode = CATEGORY_TO_DRILL_MODE[pendingTrainingCategory!];
+    const categoryErrors = recentErrors
+      .filter(e => e.category === pendingTrainingCategory)
+      .map(e => e.original)
+      .filter(Boolean)
+      .slice(0, 6); // 最多传6句，避免 prompt 过长
+
+    if (drillMode) {
+      localStorage.setItem('cet_pending_drill', JSON.stringify({
+        mode: drillMode,
+        category: pendingTrainingCategory,
+        errors: categoryErrors,
+        launchedAt: Date.now(),
+      }));
+    }
+    onNavigate('/drills');
   };
 
   // CSV导出功能
@@ -754,15 +776,15 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
       });
       filename = `词汇银行_${new Date().toISOString().slice(0, 10)}.csv`;
     } else {
-      // 导出地道搭配
+      // 导出地道搭配（云端版）
       csvContent = '\uFEFF';
-      csvContent += '英文搭配,中文释义,来源主题,日期\n';
+      csvContent += '英文搭配,中文释义,来源话题,出现次数\n';
       recentCollocations.forEach(col => {
         const row = [
           col.en,
           col.zh,
-          col.topic,
-          new Date(col.date).toLocaleDateString()
+          (col.topic || '').replace(/,/g, '，'),
+          col.frequency,
         ].join(',');
         csvContent += row + '\n';
       });
@@ -777,18 +799,69 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
     link.click();
   };
 
+  // 按话题导出 Markdown（适合导入 ima 语料库）
+  const handleExportMarkdown = () => {
+    // 收集所有话题
+    const topicSet = new Set<string>();
+    vocabBank.forEach(v => { if (v.topic) topicSet.add(v.topic); });
+    recentCollocations.forEach(c => { if (c.topic) topicSet.add(c.topic); });
+
+    if (topicSet.size === 0) {
+      alert('暂无话题数据，完成训练后再导出');
+      return;
+    }
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    let md = `# 审辨写作训练 · 个人语料库\n\n`;
+    md += `> 导出时间：${dateStr}　词汇：${vocabBank.length} 个　搭配：${recentCollocations.length} 条\n\n`;
+    md += `---\n\n`;
+
+    Array.from(topicSet).sort().forEach(topic => {
+      md += `## ${topic}\n\n`;
+
+      const topicVocab = vocabBank.filter(v => v.topic === topic);
+      if (topicVocab.length > 0) {
+        md += `### 核心词汇\n\n`;
+        md += `| 单词 | 中文释义 | 英文释义 | 例句 | 出现次数 |\n`;
+        md += `|------|---------|---------|------|--------|\n`;
+        topicVocab.forEach(v => {
+          const usage = (v.usage || '').replace(/\|/g, '｜');
+          const def = (v.english_def || '').replace(/\|/g, '｜');
+          md += `| **${v.word}** | ${v.chinese} | ${def} | *${usage}* | ${v.frequency} |\n`;
+        });
+        md += `\n`;
+      }
+
+      const topicCols = recentCollocations.filter(c => c.topic === topic);
+      if (topicCols.length > 0) {
+        md += `### 地道搭配\n\n`;
+        topicCols.forEach(c => {
+          const freq = c.frequency > 1 ? ` ×${c.frequency}` : '';
+          md += `- **${c.en}** — ${c.zh}${freq}\n`;
+        });
+        md += `\n`;
+      }
+
+      md += `---\n\n`;
+    });
+
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `语料库_按话题_${dateStr}.md`;
+    link.click();
+  };
+
   // Effects & Data Loading
   const refreshData = useCallback(() => {
     try {
       setStats(getAllLearningStats());
       setHistoryItems(getHistory());
-      setRecentCollocations(getAggregatedUserCollocations(20));
       setRecentErrors(getAggregatedUserErrors(20));
     } catch (err) {
       console.error('[ProfileCenter] Failed to load data:', err);
       setStats({ socraticCount: 0, graderCount: 0, drillCount: 0 });
       setHistoryItems([]);
-      setRecentCollocations([]);
       setRecentErrors([]);
     }
     setLoading(false);
@@ -803,11 +876,49 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
       if (saved) {
         const user = JSON.parse(saved);
         if (user?.id) {
-          // 加载词汇银行
+          // 加载词汇银行（含一次性 localStorage 迁移）
           setVocabBankLoading(true);
-          getVocabularyBank(user.id, 200).then(({ data }) => {
+          const migrateAndLoadVocab = async () => {
+            const VOCAB_MIGRATE_KEY = `cet_vocab_migrated_${user.id}`;
+            if (!localStorage.getItem(VOCAB_MIGRATE_KEY)) {
+              // 从 localStorage scaffold 历史中读取全量词汇
+              const legacyVocab = getAggregatedUserVocab(500);
+              if (legacyVocab.length > 0) {
+                // 旧数据没有 topic，统一标记为"历史训练"
+                await upsertVocabularyBank(user.id, legacyVocab, '历史训练').catch(() => {});
+              }
+              localStorage.setItem(VOCAB_MIGRATE_KEY, '1');
+            }
+            const { data } = await getVocabularyBank(user.id, 200);
             setVocabBank(data || []);
-          }).catch(() => setVocabBank([])).finally(() => setVocabBankLoading(false));
+          };
+          migrateAndLoadVocab().catch(() => setVocabBank([])).finally(() => setVocabBankLoading(false));
+
+          // 加载搭配银行（含一次性 localStorage 迁移）
+          setCollocationBankLoading(true);
+          const migrateAndLoadCollocations = async () => {
+            const MIGRATE_KEY = `cet_collocation_migrated_${user.id}`;
+            if (!localStorage.getItem(MIGRATE_KEY)) {
+              // 读取 localStorage 中的历史搭配（不限数量）
+              const legacyCols = getAggregatedUserCollocations(500);
+              if (legacyCols.length > 0) {
+                // 按话题分组批量上传
+                const byTopic = new Map<string, { en: string; zh: string }[]>();
+                legacyCols.forEach(c => {
+                  const t = c.topic || '历史训练';
+                  if (!byTopic.has(t)) byTopic.set(t, []);
+                  byTopic.get(t)!.push({ en: c.en, zh: c.zh });
+                });
+                for (const [topic, cols] of byTopic.entries()) {
+                  await upsertCollocationBank(user.id, cols, topic).catch(() => {});
+                }
+              }
+              localStorage.setItem(MIGRATE_KEY, '1');
+            }
+            const { data } = await getCollocationBank(user.id, 200);
+            setRecentCollocations(data || []);
+          };
+          migrateAndLoadCollocations().catch(() => setRecentCollocations([])).finally(() => setCollocationBankLoading(false));
 
           Promise.all([
             getThinkingProcessByUser(user.id),
@@ -1212,14 +1323,24 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                     </p>
                   </div>
                 </div>
-                <button
-                  onClick={handleExportCSV}
-                  disabled={activeVaultTab === 'vocabulary' ? vocabBank.length === 0 : recentCollocations.length === 0}
-                  className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-medium rounded-lg border border-slate-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="导出当前分类为CSV"
-                >
-                  导出 CSV
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleExportCSV}
+                    disabled={activeVaultTab === 'vocabulary' ? vocabBank.length === 0 : recentCollocations.length === 0}
+                    className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-medium rounded-lg border border-slate-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="导出当前分类为 CSV"
+                  >
+                    导出 CSV
+                  </button>
+                  <button
+                    onClick={handleExportMarkdown}
+                    disabled={vocabBank.length === 0 && recentCollocations.length === 0}
+                    className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-medium rounded-lg border border-slate-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="按话题分组导出 Markdown，可直接导入 ima 语料库"
+                  >
+                    按话题导出
+                  </button>
+                </div>
               </div>
 
               {/* Tab 切换 */}
@@ -1240,7 +1361,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                     : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
                     }`}
                 >
-                  地道搭配 ({recentCollocations.length})
+                  地道搭配 ({collocationBankLoading ? '…' : recentCollocations.length})
                 </button>
               </div>
 
@@ -1320,13 +1441,30 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                     );
                   })()
                 ) : (
-                  recentCollocations.length > 0 ? (
-                    <div className="flex flex-col gap-2 pr-2">
-                      {recentCollocations.map((col, i) => (
-                        <CollocationBadge key={i} collocation={col} />
+                  collocationBankLoading ? (
+                    <div className="h-full flex items-center justify-center text-slate-400 text-sm">加载中...</div>
+                  ) : recentCollocations.length > 0 ? (
+                    <div className="flex flex-col gap-1 pr-1">
+                      {recentCollocations.map(col => (
+                        <div key={col.id} className="flex items-center gap-2 px-3 py-2 border border-slate-100 rounded-lg hover:bg-slate-50 transition-colors group">
+                          <span className="font-semibold text-sm text-slate-700 flex-1">{col.en}</span>
+                          <span className="text-xs text-slate-500">{col.zh}</span>
+                          {col.frequency > 1 && (
+                            <span className="px-1.5 py-0.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded border border-emerald-200">×{col.frequency}</span>
+                          )}
+                          <button
+                            onClick={() => deleteCollocationBankEntry(col.id).then(() => setRecentCollocations(prev => prev.filter(c => c.id !== col.id)))}
+                            className="ml-1 text-slate-300 hover:text-rose-400 transition-colors text-xs opacity-0 group-hover:opacity-100"
+                            title="移除此搭配"
+                          >✕</button>
+                        </div>
                       ))}
                     </div>
-                  ) : <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm py-8">暂无积累</div>
+                  ) : (
+                    <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm py-8">
+                      完成一次思维训练后，搭配将自动入库
+                    </div>
+                  )
                 )}
               </div>
             </div>

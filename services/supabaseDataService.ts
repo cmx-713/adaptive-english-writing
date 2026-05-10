@@ -1140,6 +1140,110 @@ export const deleteVocabBankEntry = async (entryId: string) => {
   return { error }
 }
 
+// ==========================================
+// 地道搭配银行（wc_collocation_bank）
+// ==========================================
+
+export interface CollocationBankEntry {
+  id: string
+  user_id: string
+  en: string
+  zh: string
+  topic: string | null
+  frequency: number
+  first_seen: string
+  last_seen: string
+}
+
+/**
+ * 批量 upsert 搭配到地道搭配银行
+ * 已存在则累加 frequency + 更新 last_seen，否则插入新行
+ */
+export const upsertCollocationBank = async (
+  userId: string,
+  collocations: { en: string; zh: string }[],
+  topic: string
+) => {
+  if (!collocations || collocations.length === 0) return
+
+  try {
+    const enList = collocations.map(c => c.en.toLowerCase())
+    const { data: existing } = await supabase
+      .from('wc_collocation_bank')
+      .select('id, en, frequency')
+      .eq('user_id', userId)
+      .in('en', enList)
+
+    const existingMap = new Map<string, { id: string; frequency: number }>(
+      (existing || []).map((r: any) => [r.en.toLowerCase(), { id: r.id, frequency: r.frequency }])
+    )
+
+    const now = new Date().toISOString()
+    const toInsert: any[] = []
+    const toUpdate: { id: string; frequency: number }[] = []
+
+    for (const c of collocations) {
+      const key = c.en.toLowerCase()
+      const found = existingMap.get(key)
+      if (found) {
+        toUpdate.push({ id: found.id, frequency: found.frequency + 1 })
+      } else {
+        toInsert.push({
+          user_id: userId,
+          en: c.en,
+          zh: c.zh,
+          topic,
+          frequency: 1,
+          first_seen: now,
+          last_seen: now,
+        })
+      }
+    }
+
+    if (toInsert.length > 0) {
+      const { error: insErr } = await supabase.from('wc_collocation_bank').insert(toInsert)
+      if (insErr) console.error('[CollocationBank] 插入搭配失败:', insErr)
+    }
+
+    for (const u of toUpdate) {
+      await supabase
+        .from('wc_collocation_bank')
+        .update({ frequency: u.frequency, last_seen: now })
+        .eq('id', u.id)
+    }
+  } catch (err) {
+    console.error('[CollocationBank] upsert 异常:', err)
+  }
+}
+
+/**
+ * 获取指定用户的搭配银行列表（按频次降序）
+ */
+export const getCollocationBank = async (userId: string, limit = 200, offset = 0) => {
+  const { data, error } = await supabase
+    .from('wc_collocation_bank')
+    .select('*')
+    .eq('user_id', userId)
+    .order('frequency', { ascending: false })
+    .order('last_seen', { ascending: false })
+    .range(offset, offset + limit - 1)
+
+  return { data: (data || []) as CollocationBankEntry[], error }
+}
+
+/**
+ * 删除搭配银行中的某条（按 id）
+ */
+export const deleteCollocationBankEntry = async (entryId: string) => {
+  const { error } = await supabase
+    .from('wc_collocation_bank')
+    .delete()
+    .eq('id', entryId)
+
+  if (error) console.error('[CollocationBank] 删除搭配失败:', error)
+  return { error }
+}
+
 /**
  * 获取指定学生的思维过程记录
  */
