@@ -34,6 +34,12 @@ CREATE POLICY "Allow delete collocation" ON public.wc_collocation_bank
   FOR DELETE USING (true);
 
 -- ==========================================
+-- 显式 GRANT（应对 Supabase Data API 策略变更）
+-- ==========================================
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.wc_collocation_bank TO anon, authenticated;
+
+-- ==========================================
 -- 索引
 -- ==========================================
 

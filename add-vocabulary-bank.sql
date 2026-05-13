@@ -41,6 +41,13 @@ CREATE POLICY "Allow delete vocab" ON public.wc_vocabulary_bank
   FOR DELETE USING (true);
 
 -- ==========================================
+-- 显式 GRANT（应对 Supabase Data API 策略变更）
+-- 确保 anon / authenticated 角色可通过 supabase-js 访问此表
+-- ==========================================
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.wc_vocabulary_bank TO anon, authenticated;
+
+-- ==========================================
 -- 索引（加速按 user_id + 词汇查询）
 -- ==========================================
 

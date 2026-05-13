@@ -1289,11 +1289,14 @@ export const analyzeCtrlScore = async (processData: {
       /\b(to begin with|first(ly)?|second(ly)?|third(ly)?|besides|moreover|furthermore|in addition|additionally|on the other hand|meanwhile|in contrast|for example|for instance|as a result|therefore|thus|in summary|in conclusion|overall|finally)\b/i;
     const hasCueInBodies = bodyDrafts.some((d) => transitionCue.test(d));
     const structuralHints = [
-      '【系统结构提示（仅供核对，请仍以正文为准，勿机械采信）】',
-      `- 引言字段非空且较长：${intro ? `是（约 ${intro.length} 字）` : '否'}`,
-      `- 结论字段非空且较长：${concl ? `是（约 ${concl.length} 字）` : '否'}`,
-      `- 主体段落数：${bodyDrafts.length}`,
-      `- 主体中是否出现常见英文衔接标记（To begin with / Besides / In summary 等）：${hasCueInBodies ? '检测到至少一处' : '未检测到明显标记（仍可能在句内衔接，请通读判断）'}`,
+      '【⚠️ 评分前必读：系统结构核查（基于字段内容自动生成，请严格遵守）】',
+      `▶ 引言段落：${intro ? `【存在】内容约 ${intro.length} 字，已显示在下方【引言】区域` : '【缺失】introduction 字段为空'}`,
+      `▶ 结论段落：${concl ? `【存在】内容约 ${concl.length} 字，已显示在下方【结论】区域` : '【缺失】conclusion 字段为空'}`,
+      `▶ 主体段落数：${bodyDrafts.length} 段`,
+      `▶ 主体衔接标记：${hasCueInBodies ? '检测到至少一处显性过渡词（To begin with / Besides / Moreover 等）' : '未检测到显性过渡词（仍可能有句内衔接，请通读判断）'}`,
+      '',
+      intro ? '✅ 引言已存在 → 评语中【禁止】出现"缺乏引言""没有 introduction""终稿仅有主体"等表述；应改评引言功能强弱（是否点题、预告主体）。' : '⚠️ 引言字段为空 → 可据此指出结构缺失。',
+      concl ? '✅ 结论已存在 → 评语中【禁止】出现"缺乏结论""没有 conclusion"等表述；应改评结论是否收束全文、是否回扣主体。' : '⚠️ 结论字段为空 → 可据此指出结构缺失。',
     ].join('\n');
 
     const structuredParts: string[] = [structuralHints, ''];
@@ -1332,6 +1335,12 @@ export const analyzeCtrlScore = async (processData: {
   };
 
   const systemPrompt = `你是一位大学英语写作研究专家，擅长评估学生的审辨性思维在写作过程中的体现。
+
+【评分前强制预检——必须先完成，再开始评分】
+在输出任何评分之前，请先完成以下核查：
+1. 找到 Phase 3「【引言】」标签后的内容。若该标签存在且后面有英文段落，则引言【存在】，评语中绝对不能出现"缺乏引言""没有引言""终稿仅有主体"等表述。
+2. 找到 Phase 3「【结论】」标签后的内容。若该标签存在且后面有英文段落，则结论【存在】，评语中绝对不能出现"缺乏结论""没有结论"等表述。
+3. 以上核查优先于你对篇章结构的任何主观印象。
 
 请根据以下学生的完整写作思维过程，按照"审辨信度"四维评分体系进行评分。
 
@@ -1404,6 +1413,22 @@ ${phase3Text}
 
   const raw = await callAI(systemPrompt, '审辨信度分析', schema);
   const parsed = safeJsonParse(raw, 'analyzeCtrlScore');
+
+  // 后处理兜底：若 AI 在引言/结论存在的情况下仍写了"缺乏引言/结论"，自动修正评语
+  if (assembledEssay && parsed.explanations?.argumentProgression) {
+    const intro = (assembledEssay.introduction || '').trim();
+    const concl = (assembledEssay.conclusion || '').trim();
+    let exp: string = parsed.explanations.argumentProgression;
+    if (intro && /缺乏引言|没有引言|缺少引言|无引言|仅有主体|没有\s*introduction/i.test(exp)) {
+      exp = exp.replace(/[，。；]?[^，。；]*(?:缺乏引言|没有引言|缺少引言|无引言|仅有主体|没有\s*introduction)[^，。；]*/g, '');
+      exp = exp.trim() + '（引言段落已存在，请关注其点题与预告功能。）';
+    }
+    if (concl && /缺乏结论|没有结论|缺少结论|无结论|没有\s*conclusion/i.test(exp)) {
+      exp = exp.replace(/[，。；]?[^，。；]*(?:缺乏结论|没有结论|缺少结论|无结论|没有\s*conclusion)[^，。；]*/g, '');
+      exp = exp.trim() + '（结论段落已存在，请关注其收束与回扣功能。）';
+    }
+    parsed.explanations.argumentProgression = exp;
+  }
 
   // 确保分数在合理范围内
   const clamp = (v: number) => Math.min(10, Math.max(0, Math.round(v * 10) / 10));
