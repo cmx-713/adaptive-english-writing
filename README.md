@@ -1,5 +1,5 @@
 
-# CET-4/6 Adaptive Writing Coach (大学英语四六级写作智能教练)
+# CET-4/6 Adaptive Writing Coach (英语审辨写作系统)
 
 A specialized, AI-powered writing assistant designed for students preparing for CET-4/6 exams. Unlike generic AI wrappers, this tool focuses on **scaffolding (支架式教学)**, **Socratic questioning (苏格拉底提问)**, and **contrastive learning (对比教学)**.
 
