@@ -365,7 +365,12 @@ const App: React.FC = () => {
       {/* Global Footer */}
       <footer className="border-t border-slate-200 bg-white py-8 mt-auto no-print">
         <div className="max-w-4xl mx-auto px-4 text-center text-slate-400 text-sm">
-          <p>© {new Date().getFullYear()} 审辨写作训练系统. Powered by {apiConfig.provider === 'google' ? 'Google Gemini' : apiConfig.provider} AI.</p>
+          <p>© {new Date().getFullYear()} 审辨写作训练系统. Powered by {
+            apiConfig.provider === 'deepseek' ? 'DeepSeek' :
+            apiConfig.provider === 'aliyun' ? '通义千问' :
+            apiConfig.provider === 'zhipu' ? '智谱 GLM' :
+            'AI'
+          }.</p>
         </div>
       </footer>
     </div>

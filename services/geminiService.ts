@@ -105,7 +105,7 @@ const callOpenAICompatible = async (
   model: string,
   systemPrompt: string,
   userPrompt: string,
-  options: { temperature?: number; jsonMode?: boolean } = {}
+  options: { temperature?: number; jsonMode?: boolean; provider?: ApiConfig['provider'] } = {}
 ): Promise<string> => {
   const url = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
 
@@ -123,6 +123,12 @@ const callOpenAICompatible = async (
   // JSON 模式：大部分 OpenAI 兼容 API 都支持
   if (options.jsonMode) {
     body.response_format = { type: 'json_object' };
+  }
+
+  // DeepSeek defaults to thinking mode. Disable it for this JSON-only client
+  // so the visible response is returned in message.content for parsing.
+  if (options.provider === 'deepseek') {
+    body.thinking = { type: 'disabled' };
   }
 
   const response = await fetch(url, {
@@ -266,7 +272,8 @@ const callAI = async (
       userPrompt,
       {
         temperature: options.temperature,
-        jsonMode: !!responseSchema
+        jsonMode: !!responseSchema,
+        provider: fullConfig.provider
       }
     );
   }
