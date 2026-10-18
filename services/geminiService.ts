@@ -18,8 +18,27 @@ export interface IdeaValidationResult {
   status: 'exceptional' | 'valid' | 'weak' | 'off_topic';
   feedbackTitle: string;
   analysis: string;
-  thinkingExpansion: string[]; // Layer 2: 基于用户观点的个性化思路拓展（中文）
+  focusArea?: string;
+  initialIdea?: string;
+  conversation?: IdeaCoachingTurn[];
+  revisedIdea?: string;
+  isComplete?: boolean;
+  progressSummary?: string;
+  remainingGap?: string;
+  thinkingExpansion?: string[]; // Legacy records may contain this field.
 }
+
+export interface IdeaCoachingTurn {
+  question: string;
+  hint?: string;
+  studentResponse?: string;
+  coachFeedback?: string;
+}
+
+const normalizeIdeaStatus = (status: unknown): IdeaValidationResult['status'] => {
+  if (status === 'exceptional' || status === 'valid' || status === 'weak' || status === 'off_topic') return status;
+  return 'weak';
+};
 
 // 将 Google Type schema 转为简化 JSON 示例字符串，帮助非 Google 模型理解输出结构
 const schemaToJsonExample = (schema: Schema, depth: number = 0): string => {
@@ -258,8 +277,8 @@ const callAI = async (
   // 非 Google 提供商：使用 OpenAI 兼容接口
   if (!isGoogle && fullConfig.baseUrl) {
     // OpenAI-compatible JSON mode (including DeepSeek) requires a top-level
-    // JSON object. Wrap array schemas for transport, then unwrap the result
-    // before returning so existing module contracts remain unchanged.
+    // JSON object. Wrap array schemas for transport and unwrap them before
+    // returning so existing module contracts remain unchanged.
     const isTopLevelArray = responseSchema?.type === Type.ARRAY;
     const requestSchema: Schema | undefined = isTopLevelArray
       ? {
@@ -290,7 +309,6 @@ const callAI = async (
     );
 
     if (!isTopLevelArray) return raw;
-
     const parsed = safeJsonParse(raw, 'OpenAI-compatible array response');
     if (Array.isArray(parsed)) return raw;
     if (Array.isArray(parsed?.items)) return JSON.stringify(parsed.items);
@@ -324,7 +342,7 @@ const callAI = async (
 
 // --- Module 1: Socratic Coach Functions ---
 
-export const fetchInspirationCards = async (topic: string): Promise<InspirationCard[]> => {
+export const fetchInspirationCards = async (topic: string, requestedDimensions?: string[]): Promise<InspirationCard[]> => {
   const schema: Schema = {
     type: Type.ARRAY,
     items: {
@@ -356,7 +374,10 @@ export const fetchInspirationCards = async (topic: string): Promise<InspirationC
   };
 
   const systemPrompt = "You are a CET-4/6 writing coach. Help Chinese students brainstorm. You MUST write the socraticQuestion, hint, and thinkingExpansion fields in Chinese (中文), so that students can easily understand. The dimension field should remain in English.";
-  const userPrompt = `Generate 3 distinct inspiration cards for the essay topic: "${topic}". Each card should represent a different perspective (e.g., Economic, Social, Personal). 
+  const dimensionInstruction = requestedDimensions?.length
+    ? `Generate exactly one inspiration card for the requested perspective: ${requestedDimensions[0]}. The card must be specifically relevant to the essay topic.`
+    : `Generate exactly 3 distinct inspiration cards for the essay topic. Choose the most relevant perspectives for this specific topic. Do not default to Economic, Social, or Personal unless they are genuinely appropriate. The perspectives must be clearly different from one another.`;
+  const userPrompt = `${dimensionInstruction}
 
 IMPORTANT:
 - The "socraticQuestion" and "hint" fields MUST be written in Chinese (中文) to help students understand.
@@ -383,42 +404,87 @@ export const validateIdea = async (topic: string, dimension: string, idea: strin
       status: { type: Type.STRING, enum: ['exceptional', 'valid', 'weak', 'off_topic'] },
       feedbackTitle: { type: Type.STRING },
       analysis: { type: Type.STRING },
-      thinkingExpansion: {
-        type: Type.ARRAY,
-        items: { type: Type.STRING },
-        description: "3-4 personalized thinking angles based on the student's specific idea, in Chinese"
-      }
+      focusArea: { type: Type.STRING },
+      question: { type: Type.STRING },
+      hint: { type: Type.STRING }
     },
-    required: ['status', 'feedbackTitle', 'analysis', 'thinkingExpansion']
+    required: ['status', 'feedbackTitle', 'analysis', 'focusArea', 'question', 'hint']
   };
 
-  const systemPrompt = "You are a strict but helpful writing coach. Evaluate the student's idea relevance. You MUST write the feedbackTitle, analysis, and thinkingExpansion fields in Chinese (中文), so that students can easily understand your feedback.";
-  const userPrompt = `Topic: ${topic}\nDimension: ${dimension}\nStudent Idea: ${idea}\nProvide feedback. IMPORTANT: The "feedbackTitle" and "analysis" fields MUST be written in Chinese (中文).
+  const systemPrompt = 'You are a process-guiding critical-thinking writing mentor. Guide the student with one question at a time; do not write their argument for them. Respond in Chinese.';
+  const userPrompt = `Topic: ${topic}\nStudent-selected perspective: ${dimension}\nStudent's initial idea: ${idea}
 
-CRITICAL: You must also generate "thinkingExpansion" — an array of 3-4 strings in Chinese (中文). These are PERSONALIZED thinking angles that help the student DEEPEN their specific idea. 
+Diagnose the single most important reasoning gap in this specific idea. The perspective label is context only; do not rely on fixed dimensions. Consider relevance, causal reasoning, evidence, assumptions, or another viewpoint, and select only the most useful one.
 
-Rules for thinkingExpansion:
-- Read the student's idea carefully. Identify the core angle they chose.
-- Generate 3-4 sub-points that EXTEND and DEEPEN that specific angle (not generic dimension-level points).
-- Each point should be a concrete, specific argument (15-30 Chinese characters).
-- If the student's idea is about "数据泄露对企业的影响", the expansion should be about SPECIFIC types of enterprise impact (direct losses, legal penalties, reputation damage), NOT about general economic angles.
-- If the student's idea is weak or off-topic, provide angles that could help them find a better direction within this dimension.
-
-Example: 
-Student Idea: "数据泄露会对企业造成巨大经济损失"
-Good thinkingExpansion: [
-  "直接损失：数据恢复成本、系统停机期间的营收损失",
-  "法律风险：违反GDPR等数据保护法规可能面临巨额罚款",
-  "品牌信任危机：客户流失导致长期收入下降",
-  "连锁反应：投资者信心动摇，股价下跌，融资困难"
-]
-Bad thinkingExpansion (too generic): [
-  "信息安全产业创造就业机会",
-  "网络安全投入保障基础设施"
-]`;
+Return a brief Chinese diagnosis and exactly one Socratic question that helps the student think further. Provide one optional short hint that clarifies how to approach the question without supplying an argument or answer. Do not provide ready-made points, examples that answer the question, or multiple questions. The question must be answerable by the student and clearly connected to their idea.`;
 
   const res = await callAI(systemPrompt, userPrompt, schema);
-  return safeJsonParse(res, 'validateIdea');
+  const parsed = safeJsonParse(res, 'validateIdea');
+  return {
+    status: normalizeIdeaStatus(parsed.status),
+    feedbackTitle: parsed.feedbackTitle || '导师提问',
+    analysis: parsed.analysis || '',
+    focusArea: parsed.focusArea || '',
+    initialIdea: idea,
+    conversation: [{ question: parsed.question || '你能为这个观点提供什么具体依据？', hint: parsed.hint || '' }],
+    isComplete: false,
+  };
+};
+
+export const continueIdeaCoaching = async (
+  topic: string,
+  dimension: string,
+  initialIdea: string,
+  conversation: IdeaCoachingTurn[]
+): Promise<Pick<IdeaValidationResult, 'status' | 'feedbackTitle' | 'analysis' | 'focusArea' | 'progressSummary' | 'remainingGap'> & { nextQuestion: string; nextHint: string }> => {
+  const schema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      status: { type: Type.STRING, enum: ['exceptional', 'valid', 'weak', 'off_topic'] },
+      feedbackTitle: { type: Type.STRING },
+      analysis: { type: Type.STRING },
+      focusArea: { type: Type.STRING },
+      progressSummary: { type: Type.STRING },
+      remainingGap: { type: Type.STRING },
+      nextQuestion: { type: Type.STRING },
+      nextHint: { type: Type.STRING },
+    },
+    required: ['status', 'feedbackTitle', 'analysis', 'focusArea', 'progressSummary', 'remainingGap', 'nextQuestion', 'nextHint'],
+  };
+
+  const systemPrompt = 'You are a process-guiding critical-thinking writing mentor. Respond in Chinese. Ask one focused Socratic question at a time and never write the student\'s argument for them.';
+  const transcript = conversation.map((turn, index) =>
+    `Round ${index + 1}\nCoach question: ${turn.question}\nStudent response: ${turn.studentResponse || ''}\nCoach feedback so far: ${turn.coachFeedback || ''}`
+  ).join('\n\n');
+  const canAskAnother = conversation.length < 2;
+  const userPrompt = `Topic: ${topic}\nStudent-selected perspective: ${dimension}\nInitial idea: ${initialIdea}\n\nConversation so far:\n${transcript}
+
+Respond to the student's latest answer with concise, specific feedback. If an important reasoning gap remains and fewer than two question-answer rounds have occurred, ask exactly one next question. Otherwise leave nextQuestion empty and nextHint empty to finish.
+
+Choose only one focus for any next question (evidence, causal link, assumption, alternative viewpoint, scope, or another gap grounded in the student's own response). Do not repeat a question already asked. Do not give ready-made arguments, facts, or a model answer. The perspective label is context only; adapt to any dimension.
+
+Assessment consistency is essential:
+- "analysis" is concise feedback on the latest response. Do not claim an argument is proven merely because a plausible mechanism was named.
+- "progressSummary" states the specific reasoning move the student has made, based only on their actual answers.
+- "remainingGap" names the most important unresolved limitation. If evidence or a concrete example is still missing, say so explicitly and do not describe the claim as established. If no substantial gap remains for this writing task, say "暂无明显缺口".
+- These fields must not contradict each other. When finishing, calibrate the writing status in the wording: for example, a plausible explanation is ready to develop but still needs evidence. Do not use a numeric score.
+- If another question will be asked, leave progressSummary and remainingGap empty; the final assessment belongs after the last answer.
+- Keep the feedback supportive and specific; do not introduce unsupported facts.
+
+Can ask another question: ${canAskAnother ? 'yes' : 'no; finish now'}`;
+
+  const res = await callAI(systemPrompt, userPrompt, schema);
+  const parsed = safeJsonParse(res, 'continueIdeaCoaching');
+  return {
+    status: normalizeIdeaStatus(parsed.status),
+    feedbackTitle: parsed.feedbackTitle || '本轮反馈',
+    analysis: parsed.analysis || '',
+    focusArea: parsed.focusArea || '',
+    progressSummary: (parsed.progressSummary || '').trim(),
+    remainingGap: (parsed.remainingGap || '').trim(),
+    nextQuestion: canAskAnother ? (parsed.nextQuestion || '').trim() : '',
+    nextHint: canAskAnother ? (parsed.nextHint || '').trim() : '',
+  };
 };
 
 export const fetchLanguageScaffolds = async (topic: string, dimension: string, userIdea: string): Promise<ScaffoldContent> => {

@@ -330,6 +330,8 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                                                 {cards.map((card: any) => {
                                                     const idea = userIdeas[card.id];
                                                     const validation = validations[card.id];
+                                                    const initialIdea = validation?.initialIdea || idea;
+                                                    const scaffoldIdea = drafts[card.id]?.userIdea || validation?.revisedIdea?.trim() || initialIdea;
                                                     const expansion = expansions[card.id];
                                                     const vConfig = validation ? validationStatusConfig[validation.status] : null;
 
@@ -345,11 +347,11 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                                                                 )}
                                                             </div>
 
-                                                            {/* 学生观点 */}
-                                                            {idea ? (
+                                                            {/* 学生初始观点 */}
+                                                            {initialIdea ? (
                                                                 <div className="bg-blue-50 rounded p-2 mb-2">
-                                                                    <span className="text-[10px] font-bold text-blue-500 uppercase block mb-0.5">学生观点</span>
-                                                                    <p className="text-xs text-blue-900 leading-relaxed">{idea}</p>
+                                                                    <span className="text-[10px] font-bold text-blue-500 uppercase block mb-0.5">学生初始观点</span>
+                                                                    <p className="text-xs text-blue-900 leading-relaxed">{initialIdea}</p>
                                                                 </div>
                                                             ) : (
                                                                 <p className="text-xs text-slate-300 italic mb-2">（未填写）</p>
@@ -358,8 +360,41 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                                                             {/* AI 验证反馈 */}
                                                             {validation && (
                                                                 <div className={`rounded p-2 mb-2 border ${vConfig?.color || ''}`}>
-                                                                    <span className="text-[10px] font-bold uppercase block mb-0.5 opacity-70">苏格拉底反馈</span>
+                                                                    <span className="text-[10px] font-bold uppercase block mb-0.5 opacity-70">思考诊断 · {validation.focusArea || '观点分析'}</span>
                                                                     <p className="text-xs leading-relaxed opacity-90">{validation.analysis}</p>
+                                                                </div>
+                                                            )}
+
+                                                            {Array.isArray(validation?.conversation) && validation.conversation.length > 0 && (
+                                                                <div className="rounded p-2 mb-2 border border-sky-100 bg-sky-50/60">
+                                                                    <span className="text-[10px] font-bold text-sky-700 uppercase block mb-2">逐轮导师对话</span>
+                                                                    <div className="space-y-2">
+                                                                        {validation.conversation.map((turn: any, index: number) => (
+                                                                            <div key={`${card.id}-dialogue-${index}`} className="border-l-2 border-sky-200 pl-2">
+                                                                                <p className="text-xs text-sky-900 leading-relaxed"><span className="font-bold">导师提问 · {index + 1}：</span>{turn.question}</p>
+                                                                                {turn.studentResponse && (
+                                                                                    <p className="text-xs text-slate-700 leading-relaxed mt-1"><span className="font-bold">学生：</span>{turn.studentResponse}</p>
+                                                                                )}
+                                                                                {turn.coachFeedback && (
+                                                                                    <p className="text-xs text-emerald-800 leading-relaxed mt-1"><span className="font-bold">导师反馈：</span>{turn.coachFeedback}</p>
+                                                                                )}
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                </div>
+                                                            )}
+
+                                                            {(validation?.progressSummary || validation?.remainingGap) && (
+                                                                <div className="rounded p-2 mb-2 border border-emerald-100 bg-emerald-50/70 space-y-1">
+                                                                    {validation.progressSummary && <p className="text-xs text-emerald-900 leading-relaxed"><span className="font-bold">思考进展：</span>{validation.progressSummary}</p>}
+                                                                    {validation.remainingGap && <p className="text-xs text-amber-900 leading-relaxed"><span className="font-bold">写作时仍需留意：</span>{validation.remainingGap}</p>}
+                                                                </div>
+                                                            )}
+
+                                                            {validation && scaffoldIdea && (
+                                                                <div className="bg-emerald-50 rounded p-2 mb-2 border border-emerald-100">
+                                                                    <span className="text-[10px] font-bold text-emerald-700 uppercase block mb-0.5">{drafts[card.id] ? '用于语言支架的观点' : '当前采用观点'}{validation.revisedIdea?.trim() ? ' · 学生修订' : ' · 沿用初始观点'}</span>
+                                                                    <p className="text-xs text-emerald-900 leading-relaxed">{scaffoldIdea}</p>
                                                                 </div>
                                                             )}
 

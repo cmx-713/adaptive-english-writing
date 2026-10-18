@@ -947,6 +947,7 @@ export const createThinkingProcess = async (
 export const updateThinkingProcess = async (
   processId: string,
   updates: {
+    inspiration_cards?: any[]
     user_ideas?: Record<string, string>
     validation_results?: Record<string, any>
     personalized_expansions?: Record<string, string[]>

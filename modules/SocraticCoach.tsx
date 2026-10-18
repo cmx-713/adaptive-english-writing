@@ -21,6 +21,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
 
   // Data State
   const [cards, setCards] = useState<InspirationCard[]>([]);
+  const [addingDimension, setAddingDimension] = useState<string | null>(null);
   const [activeCard, setActiveCard] = useState<InspirationCard | null>(null);
   const [scaffoldData, setScaffoldData] = useState<ScaffoldContent | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +74,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     setError(null);
     sessionStartRef.current = Date.now(); // 重置会话计时
     setActiveCard(null);
+    setAddingDimension(null);
     setStep1Inputs({});
     setDimensionDrafts({}); // 新topic清空草稿
     setPersonalizedExpansions({}); // 清空个性化拓展
@@ -197,18 +199,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     currentDraftRef.current = draft;
   };
 
-  // 个性化拓展回调（从 PhaseOneCards 接收 Layer 2 数据）
-  const handlePersonalizedExpansion = (cardId: string, expansion: string[]) => {
-    setPersonalizedExpansions(prev => {
-      const next = { ...prev, [cardId]: expansion };
-      // 同步到思维过程记录
-      if (thinkingProcessIdRef.current) {
-        updateThinkingProcess(thinkingProcessIdRef.current, { personalized_expansions: next }).catch(() => { });
-      }
-      return next;
-    });
-  };
-
   // 累积的验证结果（用于合并后发送到 Supabase）
   const validationResultsRef = useRef<Record<string, IdeaValidationResult>>({});
 
@@ -220,6 +210,32 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       updateThinkingProcess(thinkingProcessIdRef.current, {
         validation_results: validationResultsRef.current
       }).catch(() => { });
+    }
+  };
+
+  // 根据学生选择的额外视角生成一张新的思维卡片，复用现有卡片流程
+  const handleAddDimension = async (dimension: string) => {
+    if (addingDimension || cards.some(card => card.dimension.toLowerCase() === dimension.toLowerCase())) return;
+
+    setAddingDimension(dimension);
+    setError(null);
+    try {
+      const newCards = await fetchInspirationCards(currentTopic, [dimension]);
+      const newCard = newCards[0];
+      if (!newCard) throw new Error('未能生成该维度，请稍后重试。');
+
+      setCards(prev => {
+        const next = [...prev, newCard];
+        if (thinkingProcessIdRef.current) {
+          updateThinkingProcess(thinkingProcessIdRef.current, { inspiration_cards: next }).catch(() => { });
+        }
+        return next;
+      });
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || '新增维度失败，请重试。');
+    } finally {
+      setAddingDimension(null);
     }
   };
 
@@ -362,6 +378,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   const resetApp = () => {
     setFlowState('input_topic');
     setCards([]);
+    setAddingDimension(null);
     setScaffoldData(null);
     setCurrentTopic('');
     setActiveCard(null);
@@ -441,7 +458,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
             <span className="text-4xl">🎲</span>
           </div>
           <h3 className="text-xl font-bold text-slate-800 mb-2">正在抽取盲盒维度...</h3>
-          <p className="text-slate-500">苏格拉底教练正在思考启发性问题</p>
+          <p className="text-slate-500">思维导师正在设计启发性问题</p>
         </div>
       )}
 
@@ -457,8 +474,9 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
             isLoading={flowState === 'loading_scaffold'}
             dimensionDrafts={dimensionDrafts}
             onAssembleEssay={handleAssembleEssay}
-            onPersonalizedExpansion={handlePersonalizedExpansion}
             onValidationComplete={handleValidationComplete}
+            onAddDimension={handleAddDimension}
+            addingDimension={addingDimension}
           />
         </div>
       )}
@@ -468,12 +486,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
         <ResultsDisplay
           data={scaffoldData}
           topic={currentTopic}
-          socraticQuestion={activeCard?.socraticQuestion}
-          thinkingExpansion={
-            activeCard
-              ? (personalizedExpansions[activeCard.id] || activeCard.thinkingExpansion)
-              : undefined
-          }
           onBack={handleBackToDimensions}
           initialDraft={activeCard ? (dimensionDrafts[activeCard.id]?.draft || '') : ''}
           onDraftChange={handleDraftChange}

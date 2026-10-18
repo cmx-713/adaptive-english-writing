@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { InspirationCard, DimensionDraft } from '../types';
-import { validateIdea, IdeaValidationResult } from '../services/geminiService';
+import { continueIdeaCoaching, validateIdea, IdeaCoachingTurn, IdeaValidationResult } from '../services/geminiService';
 
 interface PhaseOneCardsProps {
   topic: string;
@@ -12,9 +12,19 @@ interface PhaseOneCardsProps {
   isLoading: boolean;
   dimensionDrafts: Record<string, DimensionDraft>;  // 各维度草稿
   onAssembleEssay: () => void;                       // 组合成文回调
-  onPersonalizedExpansion?: (cardId: string, expansion: string[]) => void; // 个性化拓展回调
   onValidationComplete?: (cardId: string, result: IdeaValidationResult) => void; // 观点验证完成回调
+  onAddDimension?: (dimension: string) => void;
+  addingDimension?: string | null;
 }
+
+const DIMENSION_VAULT = [
+  { label: 'Environment', icon: '🌱' },
+  { label: 'Tech', icon: '⚡' },
+  { label: 'Health', icon: '🏥' },
+  { label: 'Psychology', icon: '🧠' },
+  { label: 'Education', icon: '📚' },
+  { label: 'Ethics', icon: '⚖️' },
+];
 
 const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
   topic,
@@ -25,22 +35,23 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
   isLoading,
   dimensionDrafts,
   onAssembleEssay,
-  onPersonalizedExpansion,
-  onValidationComplete
+  onValidationComplete,
+  onAddDimension,
+  addingDimension = null
 }) => {
-  // Track revealed cards: Set<cardId>
-  const [revealedIds, setRevealedIds] = useState<Set<string>>(() => {
-    return new Set<string>();
-  });
-
-  // Track hints/rescue visibility: { [cardId]: 'hint' | 'rescue' | null }
+  // Track rescue/hint visibility: { [cardId]: 'hint' | 'rescue' | null }
   const [helperState, setHelperState] = useState<Record<string, 'hint' | 'rescue' | null>>({});
 
   // Validation State
   const [validationLoading, setValidationLoading] = useState<Record<string, boolean>>({});
   const [validationResult, setValidationResult] = useState<Record<string, IdeaValidationResult>>({});
+  const [coachingAnswers, setCoachingAnswers] = useState<Record<string, string>>({});
+  const [revisedIdeas, setRevisedIdeas] = useState<Record<string, string>>({});
+  const [coachingBusy, setCoachingBusy] = useState<Record<string, boolean>>({});
+  const [coachingErrors, setCoachingErrors] = useState<Record<string, string>>({});
   // Track if validation feedback is expanded (Accordion logic)
   const [feedbackExpanded, setFeedbackExpanded] = useState<Record<string, boolean>>({});
+  const [showMoreDimensions, setShowMoreDimensions] = useState(false);
 
   // UI State for specific button loading feedback
   const [submittingId, setSubmittingId] = useState<string | null>(null);
@@ -52,20 +63,16 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
     }
   }, [isLoading]);
 
-  const handleReveal = (id: string) => {
-    // Strict check: Must have validation result to reveal
-    if (!validationResult[id]) return;
-
-    const newRevealed = new Set(revealedIds);
-    newRevealed.add(id);
-    setRevealedIds(newRevealed);
-
-    // Auto-collapse the validation feedback when revealing to save space
-    setFeedbackExpanded(prev => ({ ...prev, [id]: false }));
-  };
+  useEffect(() => {
+    setShowMoreDimensions(false);
+  }, [topic]);
 
   const handleSubmit = (card: InspirationCard) => {
-    const idea = inputs[card.id];
+    const revisedIdea = revisedIdeas[card.id] ?? validationResult[card.id]?.revisedIdea ?? '';
+    if (revisedIdea !== (validationResult[card.id]?.revisedIdea || '')) {
+      handleRevisedIdeaChange(card.id, revisedIdea);
+    }
+    const idea = revisedIdea.trim() || validationResult[card.id]?.initialIdea || inputs[card.id];
     if (idea && idea.trim()) {
       setSubmittingId(card.id); // Set local loading state
       onSelect(card, idea);
@@ -85,31 +92,87 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
     setFeedbackExpanded(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const persistCoachingResult = (cardId: string, result: IdeaValidationResult) => {
+    onValidationComplete?.(cardId, result);
+  };
+
   const handleCheckIdea = async (card: InspirationCard) => {
     const input = inputs[card.id];
     if (!input || !input.trim()) return;
 
     setValidationLoading(prev => ({ ...prev, [card.id]: true }));
+    setCoachingErrors(prev => ({ ...prev, [card.id]: '' }));
     try {
       const result = await validateIdea(topic, card.dimension, input);
       setValidationResult(prev => ({ ...prev, [card.id]: result }));
+      setCoachingAnswers(prev => ({ ...prev, [card.id]: '' }));
+      setRevisedIdeas(prev => ({ ...prev, [card.id]: '' }));
       // Auto-expand validation when it first arrives
       setFeedbackExpanded(prev => ({ ...prev, [card.id]: true }));
-      // 只有观点有效（exceptional/valid）时，才将个性化拓展通知父组件用于语言支架页面
-      if (result.thinkingExpansion && result.thinkingExpansion.length > 0 && onPersonalizedExpansion) {
-        if (result.status === 'exceptional' || result.status === 'valid') {
-          onPersonalizedExpansion(card.id, result.thinkingExpansion);
-        }
-      }
-      // 回传验证结果给父组件（用于同步到 Supabase）
-      if (onValidationComplete) {
-        onValidationComplete(card.id, result);
-      }
+      persistCoachingResult(card.id, result);
     } catch (e) {
       console.error(e);
+      setCoachingErrors(prev => ({ ...prev, [card.id]: e instanceof Error ? e.message : '思维导师暂时无法回应，请重试。' }));
     } finally {
       setValidationLoading(prev => ({ ...prev, [card.id]: false }));
     }
+  };
+
+  const handleCoachingResponse = async (card: InspirationCard, retry = false) => {
+    const current = validationResult[card.id];
+    const conversation = current?.conversation || [];
+    const lastTurn = conversation[conversation.length - 1];
+    if (!current || !lastTurn || coachingBusy[card.id]) return;
+
+    const response = retry ? lastTurn.studentResponse || '' : (coachingAnswers[card.id] || '').trim();
+    if (!response) return;
+
+    const answeredConversation = conversation.map((turn, index) =>
+      index === conversation.length - 1 ? { ...turn, studentResponse: response } : turn
+    );
+    const pendingResult = { ...current, conversation: answeredConversation };
+    setValidationResult(prev => ({ ...prev, [card.id]: pendingResult }));
+    persistCoachingResult(card.id, pendingResult);
+    setCoachingErrors(prev => ({ ...prev, [card.id]: '' }));
+    setCoachingBusy(prev => ({ ...prev, [card.id]: true }));
+
+    try {
+      const coachReply = await continueIdeaCoaching(topic, card.dimension, current.initialIdea || inputs[card.id] || '', answeredConversation);
+      const completedConversation: IdeaCoachingTurn[] = answeredConversation.map((turn, index) =>
+        index === answeredConversation.length - 1
+          ? { ...turn, coachFeedback: coachReply.analysis }
+          : turn
+      );
+      const needsNextRound = !!coachReply.nextQuestion && completedConversation.length < 2;
+      if (needsNextRound) {
+        completedConversation.push({ question: coachReply.nextQuestion, hint: coachReply.nextHint });
+      }
+      const nextResult: IdeaValidationResult = {
+        ...pendingResult,
+        status: coachReply.status,
+        progressSummary: coachReply.progressSummary,
+        remainingGap: coachReply.remainingGap,
+        conversation: completedConversation,
+        isComplete: !needsNextRound,
+      };
+      setValidationResult(prev => ({ ...prev, [card.id]: nextResult }));
+      setCoachingAnswers(prev => ({ ...prev, [card.id]: '' }));
+      persistCoachingResult(card.id, nextResult);
+    } catch (e) {
+      console.error(e);
+      setCoachingErrors(prev => ({ ...prev, [card.id]: e instanceof Error ? e.message : '思维导师暂时无法回应，请重试。' }));
+    } finally {
+      setCoachingBusy(prev => ({ ...prev, [card.id]: false }));
+    }
+  };
+
+  const handleRevisedIdeaChange = (cardId: string, revisedIdea: string) => {
+    const current = validationResult[cardId];
+    if (!current) return;
+    const next = { ...current, revisedIdea };
+    setValidationResult(prev => ({ ...prev, [cardId]: next }));
+    setRevisedIdeas(prev => ({ ...prev, [cardId]: revisedIdea }));
+    persistCoachingResult(cardId, next);
   };
 
   // Helper to render text with bold markers (**text**)
@@ -190,11 +253,11 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
           </span>
         </div>
 
-        {/* 2. Body: Detailed Analysis (Collapsible) */}
+        {/* 2. Body: Coaching diagnosis (Collapsible) */}
         {isExpanded && (
           <div className="p-4">
             <p className={`text-sm leading-relaxed ${config.text} opacity-90`}>
-              <span className="font-bold text-xs uppercase tracking-wider block mb-1 opacity-60">Coach's Analysis</span>
+              <span className="font-bold text-xs uppercase tracking-wider block mb-1 opacity-60">思考诊断 · {result.focusArea || '观点分析'}</span>
               {renderRichText(result.analysis)}
             </p>
           </div>
@@ -205,6 +268,10 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
 
   // Identify cards that have input
   const filledCards = cards.filter(c => (inputs[c.id] || '').trim().length > 0);
+  const hasStartedThinking = Object.values(inputs).some(value => value.trim().length > 0);
+  const availableVaultDimensions = DIMENSION_VAULT.filter(dim =>
+    !cards.some(card => card.dimension.toLowerCase() === dim.label.toLowerCase())
+  );
 
   return (
     <div className="space-y-8 animate-fade-in-up pb-12">
@@ -224,8 +291,8 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
 
         <p className="text-slate-500 text-sm md:text-base max-w-2xl mx-auto">
           <span className="font-bold text-brand-600">元认知训练：</span>
-          先尝试从以下三个维度出发，写下你的第一反应（关键词或短句）。
-          <br />只有当你付出思考后，苏格拉底教练的启发才会出现。
+          先从为本题生成的不同切入点出发，写下你的第一反应（关键词或短句）。
+          <br />审辨写作思维导师会通过聚焦问题，引导你检查理由、证据与条件，不替你生成观点。
         </p>
 
         {/* 🆕 Progress Indicator - Always Visible */}
@@ -272,7 +339,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {cards.map((card) => {
-          const isRevealed = revealedIds.has(card.id);
+          const isRevealed = !!validationResult[card.id];
           const inputVal = inputs[card.id] || '';
           // 上方卡片不显示 loading 动画，loading 统一由底部卡片展示
           const isSubmitting = false;
@@ -281,7 +348,6 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
           const canCheck = inputVal.trim().length > 1; // Min length to check
           const isChecking = validationLoading[card.id];
           const hasValidation = !!validationResult[card.id]; // Must have result to reveal
-          const canReveal = hasValidation && !isChecking;
 
           return (
             <div
@@ -358,6 +424,11 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
 
                 {/* PRE-VALIDATION FEEDBACK - COLLAPSIBLE */}
                 {renderValidationFeedback(card.id)}
+                {coachingErrors[card.id] && !hasValidation && (
+                  <div className="mt-3 p-2 rounded border border-rose-200 bg-rose-50 text-xs text-rose-700" role="alert">
+                    {coachingErrors[card.id]}
+                  </div>
+                )}
 
                 {/* ACTION AREA */}
                 <div className="mt-4 space-y-4">
@@ -374,98 +445,114 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                     >
                       {isChecking ? 'Thinking...' : hasValidation ? '⚡ Re-Check' : '⚡ Check Idea'}
                     </button>
-
-                    {/* Reveal Button - Only visible if NOT revealed yet */}
-                    {!isRevealed && (
-                      <button
-                        onClick={() => handleReveal(card.id)}
-                        disabled={!canReveal || isLoading}
-                        className={`flex-1 py-2 rounded-lg font-bold text-xs transition-all flex items-center justify-center gap-1
-                                ${!canReveal || isLoading
-                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                            : 'bg-slate-800 text-white hover:bg-slate-700 shadow-md transform hover:-translate-y-0.5'}`}
-                        title={!canReveal ? "Please check your idea first" : "Reveal the coach's question"}
-                      >
-                        {canReveal ? '🔓 Reveal Coach' : '🔒 Check First'}
-                      </button>
-                    )}
                   </div>
 
                   {/* ROW 2: REVEALED CONTENT (SOCRATIC + NEXT STEP) */}
                   {isRevealed && (
                     <div className="pt-4 border-t border-dashed border-brand-200 animate-fade-in-up">
-                      {/* Coach Perspective Header */}
+                      {(() => {
+                        const result = validationResult[card.id];
+                        const conversation = result?.conversation || [];
+                        const currentTurn = conversation[conversation.length - 1];
+                        const hasPendingAnswer = !!currentTurn?.studentResponse && !currentTurn.coachFeedback;
+                        const roundComplete = !!result?.isComplete;
+                        return (
+                          <>
                       <div className="flex justify-between items-center mb-2">
                         <label className="text-xs font-bold text-brand-500 uppercase tracking-wider flex items-center gap-1">
-                          <span>👨‍🏫</span> Coach's Perspective
+                          <span>👨‍🏫</span> 思维导师引导
                         </label>
-                        <button
-                          onClick={(e) => toggleHelper(e, card.id, 'hint')}
-                          className="text-[10px] text-slate-400 hover:text-brand-500 underline decoration-slate-200"
-                        >
-                          {helperState[card.id] === 'hint' ? 'Hide Hint' : 'Too hard?'}
-                        </button>
+                        <span className="text-[10px] text-slate-400">{roundComplete ? '引导完成' : `第 ${Math.min(conversation.length, 2)}/2 轮`}</span>
                       </div>
 
-                      {/* Socratic Question Box */}
-                      <div className="bg-brand-50/50 p-3 rounded-lg border border-brand-100 mb-4 relative">
-                        <p className="text-sm font-medium text-brand-900 leading-relaxed italic">
-                          "{card.socraticQuestion}"
-                        </p>
-                        {helperState[card.id] === 'hint' && (
-                          <div className="mt-2 pt-2 border-t border-brand-100 text-xs text-brand-700 animate-fade-in-up">
-                            <span className="font-bold">Hint: </span>{card.hint}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Thinking Expansion: Two-layer design */}
-                      {(() => {
-                        // Layer 2（个性化）优先于 Layer 1（通用）
-                        const personalExpansion = validationResult[card.id]?.thinkingExpansion;
-                        const validationStatus = validationResult[card.id]?.status;
-                        const hasPersonalized = personalExpansion && personalExpansion.length > 0;
-                        const displayExpansion = hasPersonalized ? personalExpansion : card.thinkingExpansion;
-
-                        // 只有观点被认可（exceptional/valid）时才标记为"个性化"
-                        const isGenuinelyPersonalized = hasPersonalized && (validationStatus === 'exceptional' || validationStatus === 'valid');
-
-                        if (!displayExpansion || displayExpansion.length === 0) return null;
-
-                        return (
-                          <div className={`mb-4 rounded-lg border overflow-hidden animate-fade-in-up ${isGenuinelyPersonalized
-                              ? 'bg-teal-50/60 border-teal-200/60'
-                              : 'bg-amber-50/60 border-amber-200/60'
-                            }`}>
-                            <div className={`px-3 py-2 border-b flex items-center justify-between ${isGenuinelyPersonalized
-                                ? 'bg-teal-100/40 border-teal-200/40'
-                                : 'bg-amber-100/40 border-amber-200/40'
-                              }`}>
-                              <span className={`text-xs font-bold flex items-center gap-1.5 ${isGenuinelyPersonalized ? 'text-teal-700' : 'text-amber-700'
-                                }`}>
-                                <span>{isGenuinelyPersonalized ? '🎯' : '💡'}</span>
-                                {isGenuinelyPersonalized
-                                  ? '思路拓展 — 基于你的观点深度拓展'
-                                  : '思路拓展 — 参考方向，帮你找到切入点'}
-                              </span>
-                              {isGenuinelyPersonalized && (
-                                <span className="text-[10px] bg-teal-200/60 text-teal-700 px-1.5 py-0.5 rounded-full font-bold">
-                                  个性化
-                                </span>
+                      <div className="space-y-3 mb-4">
+                        {conversation.map((turn, index) => (
+                          <div key={`${card.id}-turn-${index}`} className="space-y-2">
+                            <div className="bg-brand-50/60 p-3 rounded-lg border border-brand-100">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-brand-600 mb-1">导师提问 · 第 {index + 1} 轮</div>
+                              <p className="text-sm font-medium text-brand-900 leading-relaxed">{turn.question}</p>
+                              {turn.hint && (
+                                <details className="mt-2 text-xs text-brand-700">
+                                  <summary className="cursor-pointer select-none">需要一点提示</summary>
+                                  <p className="mt-1 leading-relaxed">{turn.hint}</p>
+                                </details>
                               )}
                             </div>
-                            <ul className="px-3 py-2 space-y-1.5">
-                              {displayExpansion.map((point, idx) => (
-                                <li key={idx} className={`flex items-start gap-2 text-xs leading-relaxed ${isGenuinelyPersonalized ? 'text-teal-900/80' : 'text-amber-900/80'
-                                  }`}>
-                                  <span className={`mt-0.5 flex-shrink-0 ${isGenuinelyPersonalized ? 'text-teal-500' : 'text-amber-500'}`}>•</span>
-                                  <span>{point}</span>
-                                </li>
-                              ))}
-                            </ul>
+                            {turn.studentResponse && (
+                              <div className="ml-3 pl-3 border-l-2 border-sky-200">
+                                <div className="text-[10px] font-bold uppercase tracking-wider text-sky-600 mb-1">你的回应</div>
+                                <p className="text-xs text-slate-700 leading-relaxed">{turn.studentResponse}</p>
+                                {turn.coachFeedback && <p className="text-xs text-emerald-700 leading-relaxed mt-2">导师反馈：{turn.coachFeedback}</p>}
+                              </div>
+                            )}
                           </div>
-                        );
-                      })()}
+                        ))}
+                      </div>
+
+                      {roundComplete && (result?.progressSummary || result?.remainingGap) && (
+                        <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50/70 p-3 space-y-2">
+                          {result.progressSummary && (
+                            <p className="text-xs text-emerald-900 leading-relaxed"><span className="font-bold">思考进展：</span>{result.progressSummary}</p>
+                          )}
+                          {result.remainingGap && (
+                            <p className="text-xs text-amber-900 leading-relaxed"><span className="font-bold">写作时仍需留意：</span>{result.remainingGap}</p>
+                          )}
+                        </div>
+                      )}
+
+                      {coachingErrors[card.id] && (
+                        <div className="mb-3 p-2 rounded border border-rose-200 bg-rose-50 text-xs text-rose-700" role="alert">
+                          {coachingErrors[card.id]}
+                        </div>
+                      )}
+
+                      {!roundComplete && currentTurn && !currentTurn.studentResponse && (
+                        <div className="mb-4 space-y-2">
+                          <textarea
+                            value={coachingAnswers[card.id] || ''}
+                            onChange={e => setCoachingAnswers(prev => ({ ...prev, [card.id]: e.target.value }))}
+                            disabled={coachingBusy[card.id] || isLoading}
+                            rows={3}
+                            className="w-full p-3 rounded-lg border border-sky-200 text-sm text-slate-800 outline-none resize-y focus:ring-4 focus:ring-sky-50 focus:border-sky-400 disabled:bg-slate-50"
+                            placeholder="试着回应导师的问题，可以写关键词或一两句话。"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleCoachingResponse(card)}
+                            disabled={!coachingAnswers[card.id]?.trim() || coachingBusy[card.id] || isLoading}
+                            className="w-full py-2 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold disabled:bg-slate-200 disabled:text-slate-400"
+                          >
+                            {coachingBusy[card.id] ? '思维导师正在根据你的回应思考…' : '提交回应'}
+                          </button>
+                        </div>
+                      )}
+
+                      {hasPendingAnswer && (
+                        <button
+                          type="button"
+                          onClick={() => handleCoachingResponse(card, true)}
+                          disabled={coachingBusy[card.id] || isLoading}
+                          className="w-full py-2 mb-4 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 text-xs font-bold disabled:opacity-50"
+                        >
+                          {coachingBusy[card.id] ? '思维导师正在反馈…' : '重试导师反馈'}
+                        </button>
+                      )}
+
+                      {roundComplete && (
+                        <div className="mb-4 space-y-2">
+                          <label className="block text-xs font-bold text-slate-600">用 1–2 句话写下修订后的中心观点（可跳过）</label>
+                          <p className="text-[11px] text-slate-500">聚焦你的主张；例子和解释可留到后续段落展开。语言支架将围绕这段观点生成，留空则沿用初步构想。</p>
+                          <textarea
+                            value={revisedIdeas[card.id] ?? result?.revisedIdea ?? ''}
+                            onChange={e => setRevisedIdeas(prev => ({ ...prev, [card.id]: e.target.value }))}
+                            onBlur={e => handleRevisedIdeaChange(card.id, e.target.value)}
+                            disabled={isLoading}
+                            rows={2}
+                            className="w-full p-3 rounded-lg border border-emerald-200 text-sm text-slate-800 outline-none resize-y focus:ring-4 focus:ring-emerald-50 focus:border-emerald-400 disabled:bg-slate-50"
+                            placeholder="例如：Environmental protection requires cooperation among society's key actors, supported by clear policies and shared responsibilities."
+                          />
+                        </div>
+                      )}
 
                       {/* MAIN CALL TO ACTION: GET SCAFFOLDS */}
                       <button
@@ -485,10 +572,13 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                           </>
                         ) : (
                           <>
-                            <span>✨</span> 获取语言支架 (Get Scaffolds)
+                            <span>✨</span> {roundComplete ? '获取语言支架' : '跳过追问并获取语言支架'}
                           </>
                         )}
                       </button>
+                          </>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
@@ -497,6 +587,47 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
           );
         })}
       </div>
+
+      {/* Progressive dimension discovery: unlock after the student starts thinking */}
+      {onAddDimension && hasStartedThinking && availableVaultDimensions.length > 0 && (
+        <div className="max-w-4xl mx-auto mt-8 border border-brand-100 rounded-xl bg-brand-50/40 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowMoreDimensions(prev => !prev)}
+            className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-brand-50 transition-colors"
+          >
+            <span>
+              <span className="font-bold text-sm text-brand-900">＋ 探索更多切入点</span>
+              <span className="block text-xs text-brand-700/70 mt-0.5">先完成初步联想，再选择一个补充视角</span>
+            </span>
+            <span className={`text-brand-500 transition-transform ${showMoreDimensions ? 'rotate-180' : ''}`}>▼</span>
+          </button>
+
+          {showMoreDimensions && (
+            <div className="px-4 pb-4 border-t border-brand-100">
+              <div className="flex flex-wrap gap-2 pt-3">
+                {availableVaultDimensions.map(dim => (
+                  <button
+                    key={dim.label}
+                    type="button"
+                    onClick={() => onAddDimension(dim.label)}
+                    disabled={!!addingDimension}
+                    className={`px-3 py-2 rounded-lg border text-xs font-bold transition-colors ${addingDimension === dim.label
+                      ? 'bg-brand-100 text-brand-700 border-brand-300 cursor-wait'
+                      : addingDimension
+                        ? 'bg-slate-50 text-slate-300 border-slate-100 cursor-not-allowed'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-brand-300 hover:text-brand-700'
+                    }`}
+                  >
+                    {addingDimension === dim.label ? '生成中…' : `${dim.icon} ${dim.label}`}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-500 mt-3">新增维度会生成一张与当前题目相关的思维卡片，并进入相同的验证与写作流程。</p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Essay Assembly CTA - show when 2+ dimensions have drafts */}
       {(() => {
