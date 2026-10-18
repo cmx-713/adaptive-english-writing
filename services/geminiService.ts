@@ -257,14 +257,26 @@ const callAI = async (
 
   // 非 Google 提供商：使用 OpenAI 兼容接口
   if (!isGoogle && fullConfig.baseUrl) {
+    // OpenAI-compatible JSON mode (including DeepSeek) requires a top-level
+    // JSON object. Wrap array schemas for transport, then unwrap the result
+    // before returning so existing module contracts remain unchanged.
+    const isTopLevelArray = responseSchema?.type === Type.ARRAY;
+    const requestSchema: Schema | undefined = isTopLevelArray
+      ? {
+          type: Type.OBJECT,
+          properties: { items: responseSchema },
+          required: ['items'],
+        }
+      : responseSchema;
+
     // 如果有 JSON schema 要求，在 prompt 中追加 JSON 格式说明 + Schema 结构
     let enhancedSystemPrompt = systemPrompt;
-    if (responseSchema) {
-      const schemaDesc = schemaToJsonExample(responseSchema);
+    if (requestSchema) {
+      const schemaDesc = schemaToJsonExample(requestSchema);
       enhancedSystemPrompt += `\n\nIMPORTANT: You MUST respond with valid JSON only. No extra text, no markdown code fences, just pure JSON.\n\nRequired JSON structure:\n${schemaDesc}`;
     }
 
-    return callOpenAICompatible(
+    const raw = await callOpenAICompatible(
       fullConfig.baseUrl,
       fullConfig.apiKey,
       fullConfig.modelName,
@@ -272,10 +284,17 @@ const callAI = async (
       userPrompt,
       {
         temperature: options.temperature,
-        jsonMode: !!responseSchema,
+        jsonMode: !!requestSchema,
         provider: fullConfig.provider
       }
     );
+
+    if (!isTopLevelArray) return raw;
+
+    const parsed = safeJsonParse(raw, 'OpenAI-compatible array response');
+    if (Array.isArray(parsed)) return raw;
+    if (Array.isArray(parsed?.items)) return JSON.stringify(parsed.items);
+    throw new Error('AI 返回的数据格式异常：数组结果缺少 items 字段，请重试。');
   }
 
   // Google 提供商：使用原生 SDK（支持 structured output / JSON schema）
