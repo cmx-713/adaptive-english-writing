@@ -1022,7 +1022,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
     }
     if (viewingItem.dataType === 'essay_grade') {
       const data = viewingItem.data as EssayHistoryData;
-      return <GradingReport result={data.result} essayText={data.essay} topic={viewingItem.topic} onBack={() => setViewingItem(null)} isHistoryView={true} />;
+      return <GradingReport result={data.result} essayText={data.essay} topic={viewingItem.topic} writingMode={data.writingMode} onBack={() => setViewingItem(null)} isHistoryView={true} />;
     }
   }
 

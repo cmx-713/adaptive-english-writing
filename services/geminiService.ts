@@ -10,7 +10,9 @@ import {
   DrillMode,
   AdaptiveContext,
   ApiConfig,
-  ContrastivePoint
+  ContrastivePoint,
+  WritingMode,
+  NarrativeCardRole
 } from "../types";
 
 // Define the IdeaValidationResult type locally and export it as it is used by components
@@ -19,6 +21,7 @@ export interface IdeaValidationResult {
   feedbackTitle: string;
   analysis: string;
   focusArea?: string;
+  narrativeRole?: NarrativeCardRole;
   initialIdea?: string;
   conversation?: IdeaCoachingTurn[];
   revisedIdea?: string;
@@ -26,6 +29,7 @@ export interface IdeaValidationResult {
   progressSummary?: string;
   remainingGap?: string;
   thinkingExpansion?: string[]; // Legacy records may contain this field.
+  writingMode?: WritingMode;
 }
 
 export interface IdeaCoachingTurn {
@@ -397,6 +401,68 @@ Each point should be a complete、specific argument (not vague), 15-30 Chinese c
   return safeJsonParse(res, 'fetchInspirationCards');
 };
 
+const normalizeNarrativeRole = (role: string | undefined, focus: string, index: number): NarrativeCardRole => {
+  const value = (role || '').toLowerCase();
+  if (value === 'scene' || value === 'response' || value === 'outcome') return value;
+  const label = focus.toLowerCase();
+  if (label.includes('结果') || label.includes('回望') || label.includes('outcome') || label.includes('reflection')) return 'outcome';
+  if (label.includes('行动') || label.includes('回应') || label.includes('response') || label.includes('choice')) return 'response';
+  return index === 1 ? 'response' : index === 2 ? 'outcome' : 'scene';
+};
+
+export const fetchNarrativePlanningCards = async (topic: string): Promise<InspirationCard[]> => {
+  const schema: Schema = {
+    type: Type.ARRAY,
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        id: { type: Type.STRING },
+        dimension: { type: Type.STRING },
+        narrativeRole: { type: Type.STRING, enum: ['scene', 'response', 'outcome'] },
+        socraticQuestion: { type: Type.STRING },
+        hint: { type: Type.STRING },
+        keywords: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: { en: { type: Type.STRING }, zh: { type: Type.STRING } },
+            required: ['en', 'zh']
+          }
+        },
+        thinkingExpansion: { type: Type.ARRAY, items: { type: Type.STRING } }
+      },
+      required: ['id', 'dimension', 'narrativeRole', 'socraticQuestion', 'hint', 'keywords', 'thinkingExpansion']
+    }
+  };
+
+  const systemPrompt = 'You help Chinese college students plan personal-experience narratives. Respond with concrete, open-ended prompts that follow how a lived experience is told, not literary character analysis, arguments, or a finished plot.';
+  const userPrompt = `Writing prompt: ${topic}
+
+Generate exactly 3 distinct story-planning cards, with exactly one card for each narrativeRole: scene, response, and outcome. The dimension field must be a short, natural Chinese label that a student can understand, such as "关键时刻与场景", "后续行动与回应", or "结果与回望"; never return English labels, internal role names, or snake_case identifiers. Avoid abstract literary-analysis labels such as "人物与动机". For personal experiences, frame the student as the narrator ("I / my"), not as a character being analyzed.
+
+The three cards must have mutually exclusive jobs. Build them from three different roles in this narrative flow: (A) anchor moment and observable setting, (B) what happened next plus the narrator's response or choice, and (C) outcome or reflection. If a card is assigned role A, it may ask only about where/when the key moment occurred and what was visibly happening; it must not ask about feelings, decisions, or later events. If assigned role B, it may ask only about the next action or response after the anchor moment; it must not repeat the setting or ask for reflection. If assigned role C, it may ask only about what changed, how the event ended, or what the narrator understands afterward; it must not reopen scene description. Do not give two cards the same role, even if their names differ. Make each card's question, hint, and thinkingExpansion stay inside its assigned role.
+
+The cards should be complementary rather than repeat one another or act as mandatory sections in a rigid template. They must not ask for a thesis, evidence, counterargument, social dimension, or general opinion. Do not invent a complete story for the student.
+
+For each card:
+- Write socraticQuestion and hint in Chinese. They should invite the student to think, not supply a plot.
+- Provide 4-6 useful English keywords with Chinese meanings.
+- Provide 2-3 short Chinese open prompts in thinkingExpansion, not plot points or ready-made sentences.`;
+
+  const res = await callAI(systemPrompt, userPrompt, schema);
+  const parsed = safeJsonParse(res, 'fetchNarrativePlanningCards');
+  const usedRoles = new Set<NarrativeCardRole>();
+  const roles: NarrativeCardRole[] = ['scene', 'response', 'outcome'];
+  return (Array.isArray(parsed) ? parsed : []).map((card: InspirationCard, index: number) => {
+    let narrativeRole = normalizeNarrativeRole(card.narrativeRole, card.dimension, index);
+    if (usedRoles.has(narrativeRole)) {
+      narrativeRole = roles.find(role => !usedRoles.has(role)) || narrativeRole;
+    }
+    usedRoles.add(narrativeRole);
+    return { ...card, narrativeRole };
+  });
+};
+
 export const validateIdea = async (topic: string, dimension: string, idea: string): Promise<IdeaValidationResult> => {
   const schema: Schema = {
     type: Type.OBJECT,
@@ -487,6 +553,196 @@ Can ask another question: ${canAskAnother ? 'yes' : 'no; finish now'}`;
   };
 };
 
+const narrativeQuestionFallback = (storyFocus: string, narrativeRole?: NarrativeCardRole, followUp = false): string => {
+  if (narrativeRole === 'scene') return '回想这个关键时刻，你最先看见的一个具体画面是什么？';
+  if (narrativeRole === 'response') return followUp ? '采取这个行动后，事情马上出现了什么变化？' : '发现这件事后，你接下来做的第一件事是什么？';
+  if (narrativeRole === 'outcome') return followUp ? '这次经历后来给你带来了什么具体改变？' : '这件事最后是怎样结束的？';
+  const focus = storyFocus.toLowerCase().replace(/[-_]+/g, ' ');
+  if (focus.includes('outcome') || focus.includes('reflection') || focus.includes('结果') || focus.includes('回望')) {
+    return focus.includes('reflection') || focus.includes('回望')
+      ? '这次经历后来让你明白了什么？'
+      : '这件事最后是怎样结束的？';
+  }
+  if (focus.includes('response') || focus.includes('choice') || focus.includes('action') || focus.includes('回应') || focus.includes('选择') || focus.includes('行动')) {
+    return '发现这件事后，你接下来做的第一件事是什么？';
+  }
+  return '回想这个关键时刻，你最先看见的一个具体画面是什么？';
+};
+
+const normalizeNarrativeHint = (hint: string | undefined, narrativeRole?: NarrativeCardRole, followUp = false): string => {
+  const candidate = (hint || '').trim();
+  if (!candidate) return '';
+  if (narrativeRole === 'outcome' && followUp && /看到|画面|第一个动作|做了什么|走出/.test(candidate)) {
+    return '想想这次经历是否改变了你后来处理类似情况的方式。';
+  }
+  if (narrativeRole === 'scene' && /接下来|第一件事|解决/.test(candidate)) {
+    return '回想当时一个看得见、听得到或能感受到的现场细节。';
+  }
+  if (narrativeRole === 'response' && /后来|多年后|明白了什么/.test(candidate)) {
+    return '回想关键时刻之后，你采取的一个具体行动。';
+  }
+  return candidate;
+};
+
+const normalizeNarrativeQuestion = (
+  question: string | undefined,
+  storyFocus: string,
+  narrativeRole?: NarrativeCardRole,
+  previousQuestions: string[] = []
+): string => {
+  const candidate = (question || '').trim();
+  const questionMarks = (candidate.match(/[?？]/g) || []).length;
+  const hasBundledChoices = /比如|例如|还是|或者|以及|分别|哪些/.test(candidate);
+  const normalizeText = (value: string) => value.replace(/[?？。！!，,]/g, '').replace(/\s+/g, '');
+  const repeatsPrevious = previousQuestions.some(previous => normalizeText(previous) === normalizeText(candidate));
+  const roleDrift = narrativeRole === 'scene'
+    ? /接下来|第一件事|做了什么|采取|解决/.test(candidate)
+    : narrativeRole === 'response'
+      ? /在哪里|何时|什么画面|看到的是什么|怎样结束|明白了什么/.test(candidate)
+      : narrativeRole === 'outcome'
+        ? /站在|看到|周围|接下来做|第一件事/.test(candidate)
+        : false;
+  return candidate && questionMarks <= 1 && !hasBundledChoices && !roleDrift && !repeatsPrevious
+    ? candidate
+    : narrativeQuestionFallback(storyFocus, narrativeRole, previousQuestions.length > 0);
+};
+
+export const validateNarrativeIdea = async (topic: string, storyFocus: string, idea: string, narrativeRole?: NarrativeCardRole): Promise<IdeaValidationResult> => {
+  const schema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      status: { type: Type.STRING, enum: ['exceptional', 'valid', 'weak', 'off_topic'] },
+      feedbackTitle: { type: Type.STRING },
+      analysis: { type: Type.STRING },
+      focusArea: { type: Type.STRING },
+      question: { type: Type.STRING },
+      hint: { type: Type.STRING }
+    },
+    required: ['status', 'feedbackTitle', 'analysis', 'focusArea', 'question', 'hint']
+  };
+
+  const systemPrompt = 'You are a narrative-writing process mentor for Chinese college students. Respond in Chinese. Help the learner develop their own lived or imagined story; never write it for them.';
+  const userPrompt = `Writing prompt: ${topic}\nStudent-selected story focus: ${storyFocus}\nStudent's initial story idea: ${idea}
+
+Identify the single most useful next step in telling this personal experience. The narrativeRole is ${narrativeRole || 'inferred from the focus'} and is binding. A scene card asks only about one observable scene detail; a response card asks only about one action immediately after the described moment; an outcome card asks only about one ending, consequence, or later understanding. Never shift to another role. Ask about motives only when the student's own account makes a reason for an action unclear; do not frame the student as a literary character. Choose only one gap genuinely grounded in the student's idea.
+
+Return a brief diagnosis and exactly one focused question. The question must target one recall task, not combine multiple prompts with "and", alternatives, or a list of details. Include one optional hint that helps the student recall or clarify their own experience without suggesting a plot or writing a sentence for them. Do not ask for a thesis, reasons, evidence, counterargument, or general opinion. Keep all three text fields in Chinese.`;
+
+  const res = await callAI(systemPrompt, userPrompt, schema);
+  const parsed = safeJsonParse(res, 'validateNarrativeIdea');
+  return {
+    status: normalizeIdeaStatus(parsed.status),
+    feedbackTitle: parsed.feedbackTitle || '故事构思提问',
+    analysis: parsed.analysis || '',
+    focusArea: parsed.focusArea || '故事细节',
+    narrativeRole,
+    initialIdea: idea,
+    conversation: [{ question: normalizeNarrativeQuestion(parsed.question, storyFocus, narrativeRole), hint: parsed.hint || '' }],
+    isComplete: false,
+    writingMode: 'narrative'
+  };
+};
+
+export const continueNarrativeCoaching = async (
+  topic: string,
+  storyFocus: string,
+  initialIdea: string,
+  conversation: IdeaCoachingTurn[],
+  narrativeRole?: NarrativeCardRole
+): Promise<Pick<IdeaValidationResult, 'status' | 'feedbackTitle' | 'analysis' | 'focusArea' | 'progressSummary' | 'remainingGap'> & { nextQuestion: string; nextHint: string }> => {
+  const schema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      status: { type: Type.STRING, enum: ['exceptional', 'valid', 'weak', 'off_topic'] },
+      feedbackTitle: { type: Type.STRING },
+      analysis: { type: Type.STRING },
+      focusArea: { type: Type.STRING },
+      progressSummary: { type: Type.STRING },
+      remainingGap: { type: Type.STRING },
+      nextQuestion: { type: Type.STRING },
+      nextHint: { type: Type.STRING }
+    },
+    required: ['status', 'feedbackTitle', 'analysis', 'focusArea', 'progressSummary', 'remainingGap', 'nextQuestion', 'nextHint']
+  };
+
+  const transcript = conversation.map((turn, index) =>
+    `Round ${index + 1}\nMentor question: ${turn.question}\nStudent response: ${turn.studentResponse || ''}\nMentor feedback: ${turn.coachFeedback || ''}`
+  ).join('\n\n');
+  const canAskAnother = conversation.length < 2;
+  const systemPrompt = 'You are a narrative-writing process mentor. Respond in Chinese, focus on one story-development question at a time, and do not invent the student\'s story.';
+  const userPrompt = `Writing prompt: ${topic}\nStory focus: ${storyFocus}\nInitial story idea: ${initialIdea}\n\nConversation:\n${transcript}
+
+Give brief, specific feedback on the student's latest response. If one important story-development gap remains and fewer than two question-answer rounds have happened, ask exactly one new question. Otherwise set nextQuestion and nextHint to empty strings. The narrativeRole is ${narrativeRole || 'inferred from the focus'} and is binding across every round.
+
+Choose only one relevant focus in the personal narrative: the key moment or context, what happened next, a response or choice, its consequence, a memorable detail, or a relevant reflection. Track what the student has already described, then ask about the single missing story beat that would most improve continuity. Keep the next question within the current card's role: an anchor card stays with observable scene details; a response card stays with the next action or immediate response; an outcome/reflection card stays with the ending or later meaning. Do not use one card to repair a gap that belongs to another card. For an outcome card, if the previous round already asked how the event ended, the next question must ask about one concrete later effect or changed understanding, never repeat the ending question. Keep the question narrow enough to answer from one memory; do not combine stage and audience, several people, multiple senses, or a sequence of separate prompts. Avoid broad wording such as "What happened on and off stage?" Ask about reasons for an action only when needed to understand the student's account; do not use literary character-analysis framing. Do not request a thesis, evidence, argument, or counterargument. Do not provide a plot, model story, or ready-made sentence.
+
+Assessment consistency:
+- analysis responds to the latest answer without adding unsupported details.
+- progressSummary names a story detail or narrative relationship the student clarified.
+- remainingGap identifies one useful detail still to develop, or says 暂无明显缺口.
+- If asking another question, ask only one short, focused question about one missing story beat. Do not use "比如", "例如", "还是", "或者", "以及", or a list of possible answers in the question. Do not bundle several subquestions, examples, locations, or people into it. Put any memory cue in the optional hint, and make the hint support that same focus without introducing another question.
+- If asking another question, leave progressSummary and remainingGap empty.
+- Keep feedback supportive, concise, and in Chinese.
+
+Can ask another question: ${canAskAnother ? 'yes' : 'no; finish now'}`;
+
+  const res = await callAI(systemPrompt, userPrompt, schema);
+  const parsed = safeJsonParse(res, 'continueNarrativeCoaching');
+  return {
+    status: normalizeIdeaStatus(parsed.status),
+    feedbackTitle: parsed.feedbackTitle || '本轮构思反馈',
+    analysis: parsed.analysis || '',
+    focusArea: parsed.focusArea || '',
+    progressSummary: (parsed.progressSummary || '').trim(),
+    remainingGap: (parsed.remainingGap || '').trim(),
+    nextQuestion: canAskAnother && parsed.nextQuestion?.trim()
+      ? normalizeNarrativeQuestion(parsed.nextQuestion, storyFocus, narrativeRole, conversation.map(turn => turn.question))
+      : '',
+    nextHint: canAskAnother
+      ? normalizeNarrativeHint(parsed.nextHint, narrativeRole, conversation.length > 0)
+      : ''
+  };
+};
+
+/**
+ * Turn the student's original idea and completed coaching exchange into a
+ * concise, editable story plan. This is deliberately separate from the
+ * coaching prompts so the two-round Socratic flow remains unchanged.
+ */
+export const synthesizeNarrativeRevision = async (
+  topic: string,
+  storyFocus: string,
+  initialIdea: string,
+  conversation: IdeaCoachingTurn[],
+  progressSummary?: string,
+  remainingGap?: string
+): Promise<{ revisedIdea: string }> => {
+  const schema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      revisedIdea: { type: Type.STRING }
+    },
+    required: ['revisedIdea']
+  };
+
+  const transcript = conversation.map((turn, index) =>
+    `Round ${index + 1}\nQuestion: ${turn.question}\nStudent response: ${turn.studentResponse || ''}\nMentor feedback: ${turn.coachFeedback || ''}`
+  ).join('\n\n');
+  const systemPrompt = 'You are an educational writing assistant. Respond in English and organize the student\'s own narrative roadmap without inventing story content.';
+  const userPrompt = `Writing prompt: ${topic}\nStory focus: ${storyFocus}\nOriginal story idea: ${initialIdea}\n\nCoaching exchange:\n${transcript}\n\nProgress summary: ${progressSummary || ''}\nRemaining gap: ${remainingGap || ''}
+
+Create one editable narrative roadmap in 1-2 concise English sentences. This is a planning bridge for later expansion, not a finished paragraph or a complete essay. For a personal experience, write from the student's point of view in the first person (I/my/we/our) and use a consistent narrative tense. Never refer to the writer as "the student" or "the writer". Do not write meta-commentary such as "The roadmap should center on..."; return only the story content that the student can expand. Preserve only details the student actually supplied. Do not invent people, places, dialogue, motives, actions, outcomes, or reflections. Keep the student's meaning and point of view. Include the concrete scene, action/response, and ending or change only when those elements appear in the student's material. If the exchange adds no usable detail, lightly clarify the original idea instead. Return JSON only.`;
+
+  try {
+    const res = await callAI(systemPrompt, userPrompt, schema);
+    const parsed = safeJsonParse(res, 'synthesizeNarrativeRevision');
+    return { revisedIdea: typeof parsed.revisedIdea === 'string' && parsed.revisedIdea.trim() ? parsed.revisedIdea.trim() : initialIdea };
+  } catch (error) {
+    console.warn('Narrative revision synthesis failed; keeping the original idea.', error);
+    return { revisedIdea: initialIdea };
+  }
+};
+
 export const fetchLanguageScaffolds = async (topic: string, dimension: string, userIdea: string): Promise<ScaffoldContent> => {
   const schema: Schema = {
     type: Type.OBJECT,
@@ -566,6 +822,66 @@ The hints MUST be short Chinese phrases (2-6 Chinese characters) describing what
   return safeJsonParse(res, 'fetchScaffolds');
 };
 
+export const fetchNarrativeLanguageScaffolds = async (topic: string, storyFocus: string, storyIdea: string): Promise<ScaffoldContent> => {
+  const schema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      selectedDimension: { type: Type.STRING },
+      userIdea: { type: Type.STRING },
+      vocabulary: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            word: { type: Type.STRING },
+            chinese: { type: Type.STRING },
+            englishDefinition: { type: Type.STRING },
+            usage: { type: Type.STRING },
+            usageChinese: { type: Type.STRING }
+          },
+          required: ['word', 'chinese', 'englishDefinition', 'usage', 'usageChinese']
+        }
+      },
+      collocations: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: { en: { type: Type.STRING }, zh: { type: Type.STRING } },
+          required: ['en', 'zh']
+        }
+      },
+      frames: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            patternName: { type: Type.STRING },
+            patternNameZh: { type: Type.STRING },
+            template: { type: Type.STRING },
+            modelSentence: { type: Type.STRING }
+          },
+          required: ['patternName', 'patternNameZh', 'template', 'modelSentence']
+        }
+      }
+    },
+    required: ['selectedDimension', 'userIdea', 'vocabulary', 'collocations', 'frames']
+  };
+
+  const systemPrompt = 'You provide language support for Chinese college students writing a narrative. Help them express their own scenes and experiences; never invent events or change their meaning.';
+  const userPrompt = `Writing prompt: ${topic}\nStory focus: ${storyFocus}\nStudent's story roadmap: ${storyIdea}
+
+Use this first-person roadmap as a starting point to help the student expand a complete narrative. Do not treat it as the student's finished essay and do not simply restate it. Keep model sentences compatible with the student's first-person point of view; do not switch to "the student" or third person. Generate 8-10 useful narrative vocabulary items, 6 short collocations, and 3 sentence frames tailored to the student's own story.
+- Focus on concrete actions, sensory detail, emotion, dialogue, event sequence, and reflection as appropriate to this story focus.
+- Prefer narrative verbs and precise description over argumentative vocabulary and thesis transitions.
+- Sentence templates must use short Chinese hints inside square brackets. Examples of narrative functions include establishing a scene, describing an action or reaction, moving to the next event, and reflecting on a change.
+- Model sentences are short language examples only. Do not write the student's story, introduce events or facts they did not provide, or make the model more specific than their idea supports.
+- All Chinese meanings and explanations should be natural and concise.`;
+
+  const res = await callAI(systemPrompt, userPrompt, schema);
+  const parsed = safeJsonParse(res, 'fetchNarrativeLanguageScaffolds');
+  return { ...parsed, selectedDimension: storyFocus, userIdea: storyIdea, writingMode: 'narrative' };
+};
+
 export const fetchDimensionKeywords = async (dimension: string, topic?: string): Promise<{ en: string, zh: string }[]> => {
   const schema: Schema = {
     type: Type.ARRAY,
@@ -635,6 +951,21 @@ Generate collocations that are useful for academic/CET writing on the given topi
   return safeJsonParse(res, 'fetchMoreCollocations');
 };
 
+export const fetchMoreNarrativeCollocations = async (topic: string, storyFocus: string, storyIdea: string): Promise<CollocationItem[]> => {
+  const schema: Schema = {
+    type: Type.ARRAY,
+    items: {
+      type: Type.OBJECT,
+      properties: { en: { type: Type.STRING }, zh: { type: Type.STRING } },
+      required: ['en', 'zh']
+    }
+  };
+  const systemPrompt = 'You provide concise English phrase support for narrative writing. Return reusable action, sensory, emotion, and sequencing collocations, not complete sentences or plot ideas.';
+  const userPrompt = `Writing prompt: ${topic}\nStory focus: ${storyFocus}\nStudent's story idea: ${storyIdea}\nGenerate 6 additional narrative collocations, each 2-5 words, with concise Chinese meanings. Do not use thesis transitions, argument language, or details that invent the student's story.`;
+  const res = await callAI(systemPrompt, userPrompt, schema);
+  return safeJsonParse(res, 'fetchMoreNarrativeCollocations');
+};
+
 export const analyzeDraft = async (topic: string, dimension: string, draft: string, vocabulary: VocabularyItem[]): Promise<DraftFeedback> => {
   const schema: Schema = {
     type: Type.OBJECT,
@@ -682,11 +1013,35 @@ You MUST write the comment and suggestions fields in Chinese (中文) to help st
   return safeJsonParse(res, 'analyzeDraft');
 };
 
+export const analyzeNarrativeDraft = async (topic: string, storyFocus: string, draft: string, vocabulary: VocabularyItem[]): Promise<DraftFeedback> => {
+  const schema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      score: { type: Type.NUMBER, description: 'Narrative writing feedback score from 0 to 10.' },
+      comment: { type: Type.STRING },
+      usedVocabulary: { type: Type.ARRAY, items: { type: Type.STRING } },
+      suggestions: { type: Type.ARRAY, items: { type: Type.STRING } },
+      polishedVersion: { type: Type.STRING }
+    },
+    required: ['score', 'comment', 'suggestions', 'polishedVersion']
+  };
+  const vocabList = vocabulary.map(item => item.word).join(', ');
+  const systemPrompt = 'You give supportive formative feedback on English narrative writing for Chinese college students. Evaluate story clarity and language, not argumentative reasoning. Respond to students in Chinese, preserve their story facts, and never add invented events to a polished version.';
+  const userPrompt = `Writing prompt: ${topic}\nStory focus: ${storyFocus}\nStudent draft: ${draft}\nTarget vocabulary: ${vocabList}
+
+Assess how clearly the draft presents its scene, event sequence, specific actions or details, emotions, and any change or reflection that fits the student's purpose. Also assess English grammar, word choice, and sentence fluency. Do not require a thesis, evidence, counterargument, or formal argumentative structure.
+
+Give a formative score from 0-10, a concise Chinese comment, and 2-3 actionable Chinese suggestions. The polishedVersion should improve the student's English while preserving the events, people, and meaning they actually wrote. Do not invent sensory details, dialogue, motivations, or outcomes. If information is missing, leave it missing rather than making it up.`;
+  const res = await callAI(systemPrompt, userPrompt, schema);
+  return safeJsonParse(res, 'analyzeNarrativeDraft');
+};
+
 // --- Essay Assembly: Generate Introduction and Conclusion ---
 
 export const generateEssayIntroConclusion = async (
   topic: string,
-  bodyParagraphs: { dimension: string; draft: string }[]
+  bodyParagraphs: { dimension: string; draft: string }[],
+  writingMode: WritingMode = 'argumentative'
 ): Promise<{ introduction: string; conclusion: string }> => {
   const schema: Schema = {
     type: Type.OBJECT,
@@ -699,8 +1054,13 @@ export const generateEssayIntroConclusion = async (
 
   const bodyText = bodyParagraphs.map((p, i) => `[Dimension ${i + 1}: ${p.dimension}]\n${p.draft}`).join('\n\n');
 
-  const systemPrompt = "You are a CET-4/6 writing coach. Generate an introduction and conclusion paragraph for a student's essay. Match the language level of the student's body paragraphs - do NOT write at a level far above the student's actual writing. Keep both paragraphs concise (2-3 sentences each).";
-  const userPrompt = `Topic: "${topic}"\n\nThe student has written the following body paragraphs:\n\n${bodyText}\n\nGenerate:\n- "introduction": An opening paragraph that introduces the topic and previews the main points. Match the student's writing level.\n- "conclusion": A closing paragraph that summarizes the key arguments and provides a final thought. Match the student's writing level.\n\nBoth paragraphs should be in English, concise, and appropriate for CET-4/6 level.`;
+  const isNarrative = writingMode === 'narrative';
+  const systemPrompt = isNarrative
+    ? "You are a CET-4/6 narrative-writing coach. Generate an opening scene and an ending reflection for a student's personal narrative. Match the language level of the student's body paragraphs, preserve only supplied facts, and do not invent events. Keep both parts concise (2-3 sentences each)."
+    : "You are a CET-4/6 writing coach. Generate an introduction and conclusion paragraph for a student's essay. Match the language level of the student's body paragraphs - do NOT write at a level far above the student's actual writing. Keep both paragraphs concise (2-3 sentences each).";
+  const userPrompt = isNarrative
+    ? `Writing prompt: "${topic}"\n\nThe student has written the following story sections:\n\n${bodyText}\n\nGenerate:\n- "introduction": An opening that places the reader in the story's situation or key moment. Do not write a thesis or preview arguments.\n- "conclusion": A closing that shows how the experience ends and what the narrator understands or feels afterward. Do not give advice or a general social conclusion.\n\nBoth parts should be in English, concise, first-person, and appropriate for CET-4/6 level.`
+    : `Topic: "${topic}"\n\nThe student has written the following body paragraphs:\n\n${bodyText}\n\nGenerate:\n- "introduction": An opening paragraph that introduces the topic and previews the main points. Match the student's writing level.\n- "conclusion": A closing paragraph that summarizes the key arguments and provides a final thought. Match the student's writing level.\n\nBoth paragraphs should be in English, concise, and appropriate for CET-4/6 level.`;
 
   const res = await callAI(systemPrompt, userPrompt, schema);
   return safeJsonParse(res, 'generateIntroConclusion');
@@ -708,7 +1068,7 @@ export const generateEssayIntroConclusion = async (
 
 // --- Module 2: Essay Grader ---
 
-export const gradeEssay = async (topic: string, essayText: string): Promise<EssayGradeResult> => {
+export const gradeEssay = async (topic: string, essayText: string, writingMode: WritingMode = 'argumentative'): Promise<EssayGradeResult> => {
   // Step 1: Grade and Critique
   const step1Schema: Schema = {
     type: Type.OBJECT,
@@ -766,7 +1126,7 @@ export const gradeEssay = async (topic: string, essayText: string): Promise<Essa
         items: {
           type: Type.OBJECT,
           properties: {
-            category: { type: Type.STRING, enum: ['Language Foundation', 'Logical Reasoning', 'Strategic Intent', 'Rhetorical Structure'] },
+            category: { type: Type.STRING, enum: ['Language Foundation', 'Logical Reasoning', 'Strategic Intent', 'Rhetorical Structure', 'Story Flow', 'Narrative Detail', 'Reflection & Closure'] },
             userContent: { type: Type.STRING, description: "The EXACT problematic text from the student's essay (copy-paste, do NOT paraphrase)." },
             polishedContent: { type: Type.STRING, description: "The EXACT corresponding improved text from polishedEssay (must be copy-pasted from polishedEssay, character-for-character identical)." },
             analysis: { type: Type.STRING, description: "In CHINESE. Must follow 3-part structure: (1) 问题诊断：具体指出学生表达的语言学/逻辑/策略层面缺陷 (2) 高手技法：命名并解释范文使用的具体写作技巧（如'名词化升级'、'让步-转折逻辑链'、'因果归因策略'等），引用范文原文示例 (3) 学生行动指南：给出可复制的改写公式或模板，让学生能在下一篇作文中立即运用" }
@@ -779,7 +1139,11 @@ export const gradeEssay = async (topic: string, essayText: string): Promise<Essa
     required: ['totalScore', 'subScores', 'generalComment', 'issueOverview', 'critiques', 'contrastiveLearning', 'polishedEssay']
   };
 
+  const evaluationModeGuidance = writingMode === 'narrative'
+    ? `\n\n【Narrative mode override】\nThis is a personal narrative, not an argumentative essay. Judge story content and concrete detail, event sequence and causal continuity, action/reaction, first-person and tense consistency, language, and clarity. Do not penalize the absence of a thesis, evidence, counterargument, topic-sentence argument structure, or call to action. A polished version must preserve the student's events and may not invent dialogue, sensory details, motives, people, places, or outcomes.\n`
+    : `\n\n【Argumentative mode】\nJudge thesis, reasoning, evidence, organization, language, and clarity using the existing argumentative rubric.\n`;
   const step1SystemPrompt = `You are a **warm and supportive writing mentor**, not a cold scoring machine. Your mission is to balance three goals:
+${evaluationModeGuidance}
 1. **Accurately assess** the essay's true level (this is the foundation)
 2. **Protect the student's motivation** to write (this is your使命)
 3. **Provide constructive guidance** for improvement (this is your value)
@@ -1050,7 +1414,13 @@ The \`contrastiveLearning\` and \`polishedEssay\` fields must work TOGETHER for 
 **Your warm, encouraging tone applies to generalComment and issueOverview. But the critiques array must be THOROUGH and COMPLETE — this is the student's primary learning tool.**
 
 ---`;
-  const step1UserPrompt = `Topic: ${topic || 'General Essay'}\nEssay: "${essayText}"`;
+  const modeGuidance = writingMode === 'narrative'
+    ? `\n\nWRITING MODE: PERSONAL NARRATIVE. Evaluate the piece as a story, not an argument. Do not require a thesis, evidence, counterargument, topic sentences, or an argument-style introduction and conclusion. Prioritize a concrete setting, a clear event sequence, specific actions and reactions, first-person consistency, meaningful outcome or reflection, and accurate natural English. In the polished essay, preserve the student's events and use narrative section tags such as [OPENING_SCENE], [EVENT_DEVELOPMENT], and [ENDING_REFLECTION] when helpful.\n`
+    : `\n\nWRITING MODE: ARGUMENTATIVE ESSAY. Evaluate thesis, reasoning, evidence, organization, and conclusion according to the existing rubric.\n`;
+  const narrativeCategoryGuidance = writingMode === 'narrative'
+    ? `\nFor contrastiveLearning in this narrative, use these four category names: Language Foundation, Story Flow, Narrative Detail, Reflection & Closure. Cover the student's most useful narrative improvements across these categories; do not force argumentative categories.\n`
+    : '';
+  const step1UserPrompt = `Topic: ${topic || 'General Essay'}\nEssay: "${essayText}"${modeGuidance}${narrativeCategoryGuidance}`;
 
   const step1Json = await callAI(step1SystemPrompt, step1UserPrompt, step1Schema, { temperature: 0.1 });
 
@@ -1131,9 +1501,13 @@ The \`contrastiveLearning\` and \`polishedEssay\` fields must work TOGETHER for 
   const polishedWordsContext = (step1Data.polishedEssay || '').substring(0, 1000);
 
   // 5. CALL STEP 2: Retraining Generation (INTEGRATED LEARNING)
+  const retrainingModeGuidance = writingMode === 'narrative'
+    ? `\n      **Narrative mode override:** Generate exercises for narrative development, not academic argument. Use the student's story context and the model's narrative improvements. The three exercises should target: (1) adding a concrete scene or sensory detail, (2) connecting an action to the next event or reaction, and (3) writing an ending reflection or change. Do not ask for a thesis, evidence, counterargument, or general social claim. Reference answers must remain faithful to the student's story and must not invent unsupported events.\n`
+    : `\n      **Argumentative mode:** Keep the existing academic language, reasoning, and strategic-intent exercise design.\n`;
   const step2SystemPrompt = `
       Role: CET-4/6 Writing Coach.
       Task: Generate 'Retraining' exercises to help the student *clone* the expert strategies identified in the previous step.
+      ${retrainingModeGuidance}
       
       **Core Principle: Integrated Learning (学练一体化)**
       You must NOT generate generic grammar questions. 

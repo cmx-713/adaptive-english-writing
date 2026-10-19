@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { analyzeCtrlScore, CtrlScore } from '../services/geminiService';
 import { saveCtrlScore, markCtrlReviewed } from '../services/supabaseDataService';
+import { getNarrativeFocusLabel } from '../types';
 
 interface ThinkingProcessViewProps {
     processes: any[];
@@ -262,6 +263,8 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                 const expansions = proc.personalized_expansions || {};
                 const drafts = proc.dimension_drafts || {};
                 const assembled = proc.assembled_essay;
+                const isNarrativeProcess = Object.values(validations).some((value: any) => value?.writingMode === 'narrative')
+                    || Object.values(drafts).some((value: any) => value?.scaffoldData?.writingMode === 'narrative');
 
                 // 计算完成阶段数
                 const hasIdeas = Object.keys(userIdeas).length > 0;
@@ -318,11 +321,11 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                                     {/* 竖线 */}
                                     <div className="absolute left-[11px] top-2 bottom-2 w-0.5 bg-slate-200" />
 
-                                    {/* Phase 1: 观点构思 */}
+                                    {/* Phase 1: 写作构思 */}
                                     <TimelineSection
                                         icon="💡"
-                                        title="Phase 1: 观点构思"
-                                        subtitle={`${cards.length} 个维度卡片`}
+                                        title={isNarrativeProcess ? 'Phase 1: 故事构思' : 'Phase 1: 观点构思'}
+                                        subtitle={`${cards.length} 个${isNarrativeProcess ? '故事切入点' : '维度'}卡片`}
                                         isActive={hasIdeas}
                                     >
                                         {cards.length > 0 && (
@@ -330,6 +333,8 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                                                 {cards.map((card: any) => {
                                                     const idea = userIdeas[card.id];
                                                     const validation = validations[card.id];
+                                                    const isNarrativeCard = validation?.writingMode === 'narrative'
+                                                        || drafts[card.id]?.scaffoldData?.writingMode === 'narrative';
                                                     const initialIdea = validation?.initialIdea || idea;
                                                     const scaffoldIdea = drafts[card.id]?.userIdea || validation?.revisedIdea?.trim() || initialIdea;
                                                     const expansion = expansions[card.id];
@@ -339,7 +344,7 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                                                         <div key={card.id} className="border border-slate-100 rounded-lg p-3 bg-white">
                                                             {/* 维度名称 */}
                                                             <div className="flex items-center justify-between mb-2">
-                                                                <span className="text-xs font-bold text-slate-600">{card.dimension}</span>
+                                                                <span className="text-xs font-bold text-slate-600">{isNarrativeCard ? getNarrativeFocusLabel(card.dimension) : card.dimension}</span>
                                                                 {validation && vConfig && (
                                                                     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold border ${vConfig.color}`}>
                                                                         {vConfig.icon} {validation.feedbackTitle}
@@ -350,7 +355,7 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                                                             {/* 学生初始观点 */}
                                                             {initialIdea ? (
                                                                 <div className="bg-blue-50 rounded p-2 mb-2">
-                                                                    <span className="text-[10px] font-bold text-blue-500 uppercase block mb-0.5">学生初始观点</span>
+                                                                    <span className="text-[10px] font-bold text-blue-500 uppercase block mb-0.5">{isNarrativeCard ? '学生初步故事构想' : '学生初始观点'}</span>
                                                                     <p className="text-xs text-blue-900 leading-relaxed">{initialIdea}</p>
                                                                 </div>
                                                             ) : (
@@ -360,7 +365,7 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                                                             {/* AI 验证反馈 */}
                                                             {validation && (
                                                                 <div className={`rounded p-2 mb-2 border ${vConfig?.color || ''}`}>
-                                                                    <span className="text-[10px] font-bold uppercase block mb-0.5 opacity-70">思考诊断 · {validation.focusArea || '观点分析'}</span>
+                                                                    <span className="text-[10px] font-bold uppercase block mb-0.5 opacity-70">思考诊断 · {validation.focusArea || (isNarrativeCard ? '故事构思' : '观点分析')}</span>
                                                                     <p className="text-xs leading-relaxed opacity-90">{validation.analysis}</p>
                                                                 </div>
                                                             )}
@@ -386,14 +391,18 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
 
                                                             {(validation?.progressSummary || validation?.remainingGap) && (
                                                                 <div className="rounded p-2 mb-2 border border-emerald-100 bg-emerald-50/70 space-y-1">
-                                                                    {validation.progressSummary && <p className="text-xs text-emerald-900 leading-relaxed"><span className="font-bold">思考进展：</span>{validation.progressSummary}</p>}
-                                                                    {validation.remainingGap && <p className="text-xs text-amber-900 leading-relaxed"><span className="font-bold">写作时仍需留意：</span>{validation.remainingGap}</p>}
+                                                                    {validation.progressSummary && <p className="text-xs text-emerald-900 leading-relaxed"><span className="font-bold">{isNarrativeCard ? '构思进展：' : '思考进展：'}</span>{validation.progressSummary}</p>}
+                                                                    {validation.remainingGap && <p className="text-xs text-amber-900 leading-relaxed"><span className="font-bold">{isNarrativeCard ? '故事写作时可继续补充：' : '写作时仍需留意：'}</span>{validation.remainingGap}</p>}
                                                                 </div>
                                                             )}
 
                                                             {validation && scaffoldIdea && (
                                                                 <div className="bg-emerald-50 rounded p-2 mb-2 border border-emerald-100">
-                                                                    <span className="text-[10px] font-bold text-emerald-700 uppercase block mb-0.5">{drafts[card.id] ? '用于语言支架的观点' : '当前采用观点'}{validation.revisedIdea?.trim() ? ' · 学生修订' : ' · 沿用初始观点'}</span>
+                                                                    <span className="text-[10px] font-bold text-emerald-700 uppercase block mb-0.5">{isNarrativeCard
+                                                                        ? drafts[card.id] ? '用于语言支架的故事路线图' : '当前采用故事路线图'
+                                                                        : drafts[card.id] ? '用于语言支架的观点' : '当前采用观点'}{validation.revisedIdea?.trim()
+                                                                            ? isNarrativeCard ? ' · 学生修订路线图' : ' · 学生修订'
+                                                                            : isNarrativeCard ? ' · 沿用初始构想' : ' · 沿用初始观点'}</span>
                                                                     <p className="text-xs text-emerald-900 leading-relaxed">{scaffoldIdea}</p>
                                                                 </div>
                                                             )}
@@ -423,14 +432,14 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                                     <TimelineSection
                                         icon="🏗️"
                                         title="Phase 2: 语言支架 + 草稿"
-                                        subtitle={`${Object.keys(drafts).length} 个维度有草稿`}
+                                        subtitle={`${Object.keys(drafts).length} 个${isNarrativeProcess ? '故事切入点' : '维度'}有草稿`}
                                         isActive={hasDrafts}
                                     >
                                         {Object.keys(drafts).length > 0 ? (
                                             <div className="space-y-3">
                                                 {Object.values(drafts).map((d: any) => (
                                                     <div key={d.cardId || d.dimension} className="border border-slate-100 rounded-lg p-3 bg-white">
-                                                        <div className="text-xs font-bold text-slate-600 mb-2">{d.dimension}</div>
+                                                        <div className="text-xs font-bold text-slate-600 mb-2">{isNarrativeProcess ? getNarrativeFocusLabel(d.dimension) : d.dimension}</div>
 
                                                         {/* 语言支架摘要 */}
                                                         {d.scaffoldData && (

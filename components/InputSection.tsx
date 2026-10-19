@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { UserInput } from '../types';
+import { UserInput, WritingMode } from '../types';
 
 interface InputSectionProps {
   onSubmit: (data: UserInput) => void;
@@ -21,11 +21,12 @@ const PAST_EXAM_TOPICS = [
 
 const InputSection: React.FC<InputSectionProps> = ({ onSubmit, isLoading }) => {
   const [topic, setTopic] = useState('');
+  const [writingMode, setWritingMode] = useState<WritingMode>('argumentative');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (topic.trim()) {
-      onSubmit({ topic, blindBox: true });
+      onSubmit({ topic, blindBox: true, writingMode });
     }
   };
 
@@ -45,6 +46,35 @@ const InputSection: React.FC<InputSectionProps> = ({ onSubmit, isLoading }) => {
       </div>
       
       <form onSubmit={handleSubmit} className="max-w-xl mx-auto space-y-5">
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-bold text-slate-600">选择写作类型</legend>
+          <div className="grid grid-cols-2 gap-3">
+            {([
+              { value: 'argumentative', label: '议论文', description: '提出并论证观点' },
+              { value: 'narrative', label: '记叙文', description: '讲述经历与变化' },
+            ] as const).map(option => (
+              <label
+                key={option.value}
+                className={`cursor-pointer rounded-lg border p-3 transition-colors ${writingMode === option.value
+                  ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-100'
+                  : 'border-slate-200 bg-white hover:border-blue-200'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="writingMode"
+                  value={option.value}
+                  checked={writingMode === option.value}
+                  onChange={() => setWritingMode(option.value)}
+                  disabled={isLoading}
+                  className="sr-only"
+                />
+                <span className="block font-bold text-slate-800">{option.label}</span>
+                <span className="mt-0.5 block text-xs text-slate-500">{option.description}</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
         <div className="relative group">
           <input
             id="topic"

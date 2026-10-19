@@ -9,7 +9,7 @@ import TeacherDashboard from './modules/TeacherDashboard';
 import LoginScreen from './components/LoginScreen';
 import SettingsModal from './components/SettingsModal';
 import ErrorBoundary from './components/ErrorBoundary';
-import { User, ApiConfig, Tab } from './types';
+import { User, ApiConfig, Tab, WritingMode } from './types';
 import { quickSignInSupabase, quickSignInExternal } from './services/supabaseDataService';
 
 function isRosterDenied(err: unknown): err is { code: string; message: string } {
@@ -48,10 +48,10 @@ const App: React.FC = () => {
   const [apiConfig, setApiConfig] = useState<ApiConfig>(DEFAULT_CONFIG);
 
   // 跨模块传递：从思维训练发送作文到作文批改
-  const [prefillGraderData, setPrefillGraderData] = useState<{ topic: string; essay: string } | null>(null);
+  const [prefillGraderData, setPrefillGraderData] = useState<{ topic: string; essay: string; writingMode?: WritingMode } | null>(null);
 
-  const handleSendToGrader = (topic: string, essay: string) => {
-    setPrefillGraderData({ topic, essay });
+  const handleSendToGrader = (topic: string, essay: string, writingMode?: WritingMode) => {
+    setPrefillGraderData({ topic, essay, writingMode });
     navigate('/grader');
   };
 

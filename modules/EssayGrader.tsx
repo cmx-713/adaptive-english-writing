@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { gradeEssay } from '../services/geminiService';
 import { saveToHistory, getHistory, deleteFromHistory, checkIsSaved } from '../services/storageService';
 import { saveEssayGradeToSupabase, logAgentUsage } from '../services/supabaseDataService';
-import { EssayGradeResult, HistoryItem, EssayHistoryData } from '../types';
+import { EssayGradeResult, HistoryItem, EssayHistoryData, WritingMode } from '../types';
 import HistoryModal from '../components/HistoryModal';
 import GradingReport from '../components/GradingReport';
 
@@ -49,7 +49,7 @@ const ExamTimer: React.FC<{ isActive: boolean; onToggle: () => void }> = ({ isAc
 };
 
 interface EssayGraderProps {
-  prefillData?: { topic: string; essay: string } | null;
+  prefillData?: { topic: string; essay: string; writingMode?: WritingMode } | null;
   onPrefillConsumed?: () => void;
   supabaseUserId?: string;
 }
@@ -89,6 +89,7 @@ const ScoreSelector: React.FC<{
 const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsumed, supabaseUserId }) => {
   const [topic, setTopic] = useState('');
   const [essayText, setEssayText] = useState('');
+  const [writingMode, setWritingMode] = useState<WritingMode>('argumentative');
   const [isGrading, setIsGrading] = useState(false);
   const [result, setResult] = useState<EssayGradeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +117,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
     if (prefillData) {
       setTopic(prefillData.topic);
       setEssayText(prefillData.essay);
+      setWritingMode(prefillData.writingMode || 'argumentative');
       setResult(null);
       setError(null);
       // 重置自评状态，避免残留导致视图错乱
@@ -154,7 +156,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
   // 保存AI批改结果的公共函数
   const saveGradingResult = useCallback((gradingResult: EssayGradeResult) => {
     const effectiveTopic = getEffectiveTopic();
-    const historyData: EssayHistoryData = { essay: essayText, result: gradingResult };
+    const historyData: EssayHistoryData = { essay: essayText, result: gradingResult, writingMode };
     saveToHistory(effectiveTopic, historyData, 'essay_grade');
     setIsSaved(true);
     if (supabaseUserId) {
@@ -177,7 +179,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
 
     // 同时在后台开始 AI 批改
     setIsGrading(true);
-    gradeEssay(topic, essayText).then(gradingResult => {
+    gradeEssay(topic, essayText, writingMode).then(gradingResult => {
       aiResultRef.current = gradingResult;
       setIsGrading(false);
       // 如果学生已提交自评（用 ref 避免闭包陷阱），直接显示结果
@@ -210,7 +212,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
     // Robust check: Only save if result exists and NOT already saved
     if (result && !isSaved) {
       const effectiveTopic = getEffectiveTopic();
-      const historyData: EssayHistoryData = { essay: essayText, result: result };
+      const historyData: EssayHistoryData = { essay: essayText, result: result, writingMode };
 
       // Strict dataType: 'essay_grade'
       saveToHistory(effectiveTopic, historyData, 'essay_grade');
@@ -223,6 +225,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
     setError(null);
     setEssayText('');
     setTopic('');
+    setWritingMode('argumentative');
     setSelfEvalStep('idle');
     setSelfEval({ content: 2, organization: 1, proficiency: 2, clarity: 1 });
     setSubmittedSelfEval(null);
@@ -238,6 +241,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
       const data = item.data as EssayHistoryData;
       setTopic(item.topic); // This sets the raw state. If item.topic was "Untitled Essay", state becomes "Untitled Essay"
       setEssayText(data.essay);
+      setWritingMode(data.writingMode || 'argumentative');
       setResult(data.result);
       setIsSaved(true); // It's coming from history, so it's saved
       setIsHistoryOpen(false);
@@ -515,6 +519,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
           result={result}
           essayText={essayText}
           topic={topic}
+          writingMode={writingMode}
           onBack={reset}
           onSave={handleSave}
           isSaved={isSaved}

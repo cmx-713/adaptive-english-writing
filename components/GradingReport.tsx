@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { EssayGradeResult, SentenceCritique, CritiqueCategory, KeyMaterial, ContrastivePoint } from '../types';
+import { EssayGradeResult, SentenceCritique, CritiqueCategory, KeyMaterial, ContrastivePoint, WritingMode } from '../types';
 import { evaluateRetrainingAttempt } from '../services/geminiService';
 
 interface GradingReportProps {
@@ -11,6 +11,7 @@ interface GradingReportProps {
   onSave?: () => void;
   isSaved?: boolean;
   isHistoryView?: boolean;
+  writingMode?: WritingMode;
 }
 
 // --- Helper Functions & Sub-components ---
@@ -357,8 +358,10 @@ const CritiqueAccordion: React.FC<{ title: string; items: SentenceCritique[]; co
 const StructuredEssayRenderer: React.FC<{
   fullEssay: string,
   contrastPoints: ContrastivePoint[],
-  activeIndex: number | null
-}> = ({ fullEssay, contrastPoints, activeIndex }) => {
+  activeIndex: number | null,
+  writingMode?: WritingMode
+}> = ({ fullEssay, contrastPoints, activeIndex, writingMode = 'argumentative' }) => {
+  const isNarrative = writingMode === 'narrative';
 
   // 1. Split essay into sections based on tags
   const splitRegex = /(\[[A-Z_0-9]+\])/g;
@@ -368,10 +371,13 @@ const StructuredEssayRenderer: React.FC<{
   // Map tag to friendly name
   const getSectionTitle = (tag: string) => {
     switch (tag) {
-      case '[INTRODUCTION]': return '引入段 (Introduction)';
-      case '[BODY_PARA_1]': return '主体段 1 (Body Para 1)';
-      case '[BODY_PARA_2]': return '主体段 2 (Body Para 2)';
-      case '[CONCLUSION]': return '总结段 (Conclusion)';
+      case '[INTRODUCTION]': return isNarrative ? '开篇场景 (Opening Scene)' : '引入段 (Introduction)';
+      case '[OPENING_SCENE]': return '开篇场景 (Opening Scene)';
+      case '[BODY_PARA_1]': return isNarrative ? '事件发展 1 (Event Development 1)' : '主体段 1 (Body Para 1)';
+      case '[BODY_PARA_2]': return isNarrative ? '事件发展 2 (Event Development 2)' : '主体段 2 (Body Para 2)';
+      case '[EVENT_DEVELOPMENT]': return '事件发展 (Event Development)';
+      case '[CONCLUSION]': return isNarrative ? '结尾与回望 (Ending & Reflection)' : '总结段 (Conclusion)';
+      case '[ENDING_REFLECTION]': return '结尾与回望 (Ending & Reflection)';
       default: return null;
     }
   };
@@ -452,8 +458,10 @@ const GradingReport: React.FC<GradingReportProps> = ({
   onBack,
   onSave,
   isSaved = false,
-  isHistoryView = false
+  isHistoryView = false,
+  writingMode = 'argumentative'
 }) => {
+  const isNarrative = writingMode === 'narrative';
   // 防御性数据处理：确保所有字段都有安全默认值，防止白屏崩溃
   const result = useMemo(() => {
     const r = rawResult || {} as any;
@@ -717,8 +725,8 @@ const GradingReport: React.FC<GradingReportProps> = ({
                 <div className="col-span-1 md:col-span-2 space-y-6">
                   <h3 className="font-serif font-bold text-lg text-slate-800 mb-2 border-b border-slate-50 pb-2">各项维度评分 (Sub-scores)</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-12 gap-y-6">
-                    <ScoreBar label="内容与思辨 (Content)" score={result.subScores.content} max={4} color="bg-purple-500" />
-                    <ScoreBar label="组织与逻辑 (Organization)" score={result.subScores.organization} max={3} color="bg-amber-500" />
+                    <ScoreBar label={isNarrative ? '故事内容与细节 (Story Content)' : '内容与思辨 (Content)'} score={result.subScores.content} max={4} color="bg-purple-500" />
+                    <ScoreBar label={isNarrative ? '事件发展与连贯 (Story Flow)' : '组织与逻辑 (Organization)'} score={result.subScores.organization} max={3} color="bg-amber-500" />
                     <ScoreBar label="语言纯熟度 (Proficiency)" score={result.subScores.proficiency} max={5} color="bg-blue-500" />
                     <ScoreBar label="表达清晰度 (Clarity)" score={result.subScores.clarity} max={3} color="bg-rose-500" />
                   </div>
@@ -778,8 +786,8 @@ const GradingReport: React.FC<GradingReportProps> = ({
             <div className="space-y-4">
               <CritiqueAccordion title="🗣️ 语言纯熟度 (Proficiency)" items={getCritiquesByCategory('Proficiency')} colorClass="text-blue-600" fullEssay={essayText} />
               <CritiqueAccordion title="📖 表达清晰度 (Clarity)" items={getCritiquesByCategory('Clarity')} colorClass="text-rose-600" fullEssay={essayText} />
-              <CritiqueAccordion title="🧩 组织与逻辑 (Organization)" items={getCritiquesByCategory('Organization')} colorClass="text-amber-600" fullEssay={essayText} />
-              <CritiqueAccordion title="📝 内容与思辨 (Content)" items={getCritiquesByCategory('Content')} colorClass="text-purple-600" fullEssay={essayText} />
+              <CritiqueAccordion title={isNarrative ? '🧩 事件发展与连贯 (Story Flow)' : '🧩 组织与逻辑 (Organization)'} items={getCritiquesByCategory('Organization')} colorClass="text-amber-600" fullEssay={essayText} />
+              <CritiqueAccordion title={isNarrative ? '📝 故事内容与细节 (Story Content)' : '📝 内容与思辨 (Content)'} items={getCritiquesByCategory('Content')} colorClass="text-purple-600" fullEssay={essayText} />
             </div>
           </div>
         )}
@@ -791,8 +799,8 @@ const GradingReport: React.FC<GradingReportProps> = ({
             <div className="lg:col-span-5 flex flex-col h-full bg-slate-50 rounded-2xl border border-slate-200 overflow-hidden shadow-inner">
               <div className="p-4 bg-white border-b border-slate-100 flex items-center justify-between shadow-sm z-10">
                 <div>
-                  <h3 className="font-serif font-bold text-lg text-slate-800">升格对比 (Pyramid Model)</h3>
-                  <p className="text-xs text-slate-500">点击卡片查看右侧范文对应位置</p>
+                  <h3 className="font-serif font-bold text-lg text-slate-800">{isNarrative ? '叙事对比与改写' : '升格对比 (Pyramid Model)'}</h3>
+                  <p className="text-xs text-slate-500">{isNarrative ? '点击卡片查看故事细节和表达如何改进' : '点击卡片查看右侧范文对应位置'}</p>
                 </div>
                 <span className="bg-indigo-50 text-indigo-600 text-xs font-bold px-2 py-1 rounded">
                   {result.contrastiveLearning.length} Points
@@ -817,7 +825,10 @@ const GradingReport: React.FC<GradingReportProps> = ({
                     'Language Foundation': { label: '语言地基 (Language)', icon: '🏛️', color: 'text-blue-600', border: 'border-blue-200', bg: 'bg-blue-50' },
                     'Logical Reasoning': { label: '逻辑链条 (Logic)', icon: '🔗', color: 'text-purple-600', border: 'border-purple-200', bg: 'bg-purple-50' },
                     'Strategic Intent': { label: '写作意图 (Strategy)', icon: '♟️', color: 'text-amber-600', border: 'border-amber-200', bg: 'bg-amber-50' },
-                    'Rhetorical Structure': { label: '篇章技法 (Structure)', icon: '📐', color: 'text-orange-600', border: 'border-orange-200', bg: 'bg-orange-50' }
+                    'Rhetorical Structure': { label: '篇章技法 (Structure)', icon: '📐', color: 'text-orange-600', border: 'border-orange-200', bg: 'bg-orange-50' },
+                    'Story Flow': { label: '事件发展 (Story Flow)', icon: '➡️', color: 'text-purple-600', border: 'border-purple-200', bg: 'bg-purple-50' },
+                    'Narrative Detail': { label: '叙事细节 (Narrative Detail)', icon: '🔎', color: 'text-cyan-600', border: 'border-cyan-200', bg: 'bg-cyan-50' },
+                    'Reflection & Closure': { label: '结尾回望 (Reflection)', icon: '🌱', color: 'text-emerald-600', border: 'border-emerald-200', bg: 'bg-emerald-50' }
                   }[pt.category] || { label: '综合提升 (General)', icon: '✨', color: 'text-slate-600', border: 'border-slate-200', bg: 'bg-slate-50' };
 
                   return (
@@ -887,7 +898,7 @@ const GradingReport: React.FC<GradingReportProps> = ({
               <div className="p-4 bg-white border-b border-slate-100 shadow-sm z-10 flex justify-between items-center sticky top-0 bg-opacity-95 backdrop-blur">
                 <div className="flex items-center gap-4">
                   <h3 className="font-serif font-bold text-lg text-slate-800 flex items-center gap-2">
-                    <span>🌟</span> 满分范文 (Band 14-15)
+                    <span>🌟</span> {isNarrative ? '叙事参考范文' : '满分范文 (Band 14-15)'}
                   </h3>
                   {/* NEW: Mini Radar Chart Comparison */}
                   <MiniRadar studentScores={result.subScores} modelScores={result.modelSubScores} />
@@ -902,6 +913,7 @@ const GradingReport: React.FC<GradingReportProps> = ({
                   fullEssay={result.polishedEssay}
                   contrastPoints={result.contrastiveLearning}
                   activeIndex={activeContrastIndex}
+                  writingMode={writingMode}
                 />
               </div>
             </div>
@@ -913,7 +925,7 @@ const GradingReport: React.FC<GradingReportProps> = ({
           <div className="space-y-12 animate-fade-in-up">
             <div>
               <h3 className="font-serif font-bold text-lg text-slate-800 mb-6 flex items-center gap-2">
-                <span>✍️</span> 学练一体：高阶技法克隆 (Skill Cloning)
+                <span>✍️</span> {isNarrative ? '学练一体：叙事表达迁移' : '学练一体：高阶技法克隆 (Skill Cloning)'}
               </h3>
 
               {result.retraining.exercises.length > 0 ? (

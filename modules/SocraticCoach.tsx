@@ -4,20 +4,21 @@ import InputSection from '../components/InputSection';
 import PhaseOneCards from '../components/PhaseOneCards';
 import ResultsDisplay from '../components/ResultsDisplay';
 import HistoryModal from '../components/HistoryModal';
-import { fetchInspirationCards, fetchLanguageScaffolds, generateEssayIntroConclusion, analyzeCtrlScore } from '../services/geminiService';
+import { fetchInspirationCards, fetchLanguageScaffolds, fetchNarrativePlanningCards, fetchNarrativeLanguageScaffolds, generateEssayIntroConclusion, analyzeCtrlScore } from '../services/geminiService';
 import { getHistory, deleteFromHistory, saveToHistory, checkIsSaved } from '../services/storageService';
 import { saveScaffoldToSupabase, saveInspirationToSupabase, updateScaffoldDraft, saveAssembledEssayToSupabase, logAgentUsage, createThinkingProcess, updateThinkingProcess, saveCtrlScore, upsertVocabularyBank, upsertCollocationBank } from '../services/supabaseDataService';
-import { UserInput, InspirationCard, ScaffoldContent, FlowState, HistoryItem, InspirationHistoryData, DimensionDraft } from '../types';
+import { UserInput, InspirationCard, ScaffoldContent, FlowState, HistoryItem, InspirationHistoryData, DimensionDraft, WritingMode } from '../types';
 import { IdeaValidationResult } from '../services/geminiService';
 
 interface SocraticCoachProps {
-  onSendToGrader?: (topic: string, essay: string) => void;
+  onSendToGrader?: (topic: string, essay: string, writingMode?: WritingMode) => void;
   supabaseUserId?: string;
 }
 
 const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseUserId }) => {
   const [flowState, setFlowState] = useState<FlowState>('input_topic');
   const [currentTopic, setCurrentTopic] = useState<string>('');
+  const [writingMode, setWritingMode] = useState<WritingMode>('argumentative');
 
   // Data State
   const [cards, setCards] = useState<InspirationCard[]>([]);
@@ -71,6 +72,8 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   const handleTopicSubmit = async (input: UserInput) => {
     setFlowState('loading_cards');
     setCurrentTopic(input.topic);
+    const selectedWritingMode = input.writingMode || 'argumentative';
+    setWritingMode(selectedWritingMode);
     setError(null);
     sessionStartRef.current = Date.now(); // 重置会话计时
     setActiveCard(null);
@@ -82,12 +85,15 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     thinkingProcessIdRef.current = null; // 清空旧记录 ID
 
     try {
-      const fetchedCards = await fetchInspirationCards(input.topic);
+      const fetchedCards = selectedWritingMode === 'narrative'
+        ? await fetchNarrativePlanningCards(input.topic)
+        : await fetchInspirationCards(input.topic);
       setCards(fetchedCards);
 
       const historyData: InspirationHistoryData = {
         cards: fetchedCards,
-        userInputs: {}
+        userInputs: {},
+        writingMode: selectedWritingMode
       };
       saveToHistory(input.topic, historyData, 'inspiration');
       // Supabase 双写（异步，不阻断前端）
@@ -154,7 +160,9 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     }
 
     try {
-      const result = await fetchLanguageScaffolds(currentTopic, card.dimension, userIdea);
+      const result = writingMode === 'narrative'
+        ? await fetchNarrativeLanguageScaffolds(currentTopic, card.dimension, userIdea)
+        : await fetchLanguageScaffolds(currentTopic, card.dimension, userIdea);
       setScaffoldData(result);
       currentDraftRef.current = '';
       saveToHistory(currentTopic, result, 'scaffold');
@@ -204,8 +212,9 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
 
   // 观点验证完成回调（从 PhaseOneCards 接收验证结果）
   const handleValidationComplete = (cardId: string, result: IdeaValidationResult) => {
+    const resultWithMode = { ...result, writingMode };
     // 合并到累积结果中
-    validationResultsRef.current = { ...validationResultsRef.current, [cardId]: result };
+    validationResultsRef.current = { ...validationResultsRef.current, [cardId]: resultWithMode };
     if (thinkingProcessIdRef.current) {
       updateThinkingProcess(thinkingProcessIdRef.current, {
         validation_results: validationResultsRef.current
@@ -335,7 +344,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     setIsLoadingReference(true);
     try {
       const bodyParagraphs = assembledEssay?.bodyParagraphs || [];
-      const { introduction, conclusion } = await generateEssayIntroConclusion(currentTopic, bodyParagraphs);
+      const { introduction, conclusion } = await generateEssayIntroConclusion(currentTopic, bodyParagraphs, writingMode);
       setAiReference({ introduction, conclusion });
       if (section === 'intro') setShowIntroRef(true);
       if (section === 'conclusion') setShowConclusionRef(true);
@@ -364,7 +373,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       logAgentUsage(supabaseUserId, '思维训练', 'writing_system', duration).catch(() => { });
     }
 
-    onSendToGrader(currentTopic, fullEssay);
+    onSendToGrader(currentTopic, fullEssay, writingMode);
 
     // 同步组合成文内容和状态到思维过程记录
     if (thinkingProcessIdRef.current) {
@@ -381,6 +390,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     setAddingDimension(null);
     setScaffoldData(null);
     setCurrentTopic('');
+    setWritingMode('argumentative');
     setActiveCard(null);
     setStep1Inputs({});
     setDimensionDrafts({});
@@ -399,12 +409,14 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     if (item.dataType === 'scaffold') {
       setCurrentTopic(item.topic);
       setScaffoldData(item.data as ScaffoldContent);
+      setWritingMode((item.data as ScaffoldContent).writingMode || 'argumentative');
       setActiveCard(null);
       setFlowState('showing_result');
       setIsHistoryOpen(false);
     } else if (item.dataType === 'inspiration') {
       const data = item.data as InspirationHistoryData;
       setCurrentTopic(item.topic);
+      setWritingMode(data.writingMode || 'argumentative');
       setCards(data.cards);
       setStep1Inputs(data.userInputs);
       setFlowState('selecting_card');
@@ -439,7 +451,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
             苏格拉底式<br className="md:hidden" /><span className="text-blue-900">写作思维训练</span>
           </h2>
           <p className="text-slate-600 text-lg leading-relaxed mb-8">
-            "Thinking before Scaffolding" - 我们不直接给答案，而是通过启发提问引导你构建论据，再提供地道的语言支持。
+            "Thinking before Scaffolding" - 我们不直接给答案，而是通过启发提问引导你发展写作构思，再提供地道的语言支持。
           </p>
         </div>
       )}
@@ -457,7 +469,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
           <div className="inline-block p-4 rounded-full bg-white shadow-lg mb-6">
             <span className="text-4xl">🎲</span>
           </div>
-          <h3 className="text-xl font-bold text-slate-800 mb-2">正在抽取盲盒维度...</h3>
+          <h3 className="text-xl font-bold text-slate-800 mb-2">{writingMode === 'narrative' ? '正在生成故事构思卡...' : '正在抽取盲盒维度...'}</h3>
           <p className="text-slate-500">思维导师正在设计启发性问题</p>
         </div>
       )}
@@ -467,6 +479,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
         <div className="no-print">
           <PhaseOneCards
             topic={currentTopic}
+            writingMode={writingMode}
             cards={cards}
             inputs={step1Inputs}
             onInputChange={handleStep1InputChange}
@@ -486,6 +499,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
         <ResultsDisplay
           data={scaffoldData}
           topic={currentTopic}
+          writingMode={writingMode}
           onBack={handleBackToDimensions}
           initialDraft={activeCard ? (dimensionDrafts[activeCard.id]?.draft || '') : ''}
           onDraftChange={handleDraftChange}
@@ -499,9 +513,9 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
             {/* Header */}
             <div className="text-center mb-8">
               <h2 className="text-3xl font-serif font-bold text-slate-800 mb-2">
-                📝 <span className="text-emerald-600">组合成文</span>
+                📝 <span className="text-emerald-600">{writingMode === 'narrative' ? '整理完整故事' : '组合成文'}</span>
               </h2>
-              <p className="text-slate-500">写好引言和结论，完成后可一键发送到作文批改</p>
+              <p className="text-slate-500">{writingMode === 'narrative' ? '展开故事路线图，完成后可一键发送到叙事写作批改' : '写好引言和结论，完成后可一键发送到作文批改'}</p>
               <div className="mt-3 bg-white border border-slate-200 rounded-lg p-3 shadow-sm inline-flex items-center gap-3">
                 <span className="bg-brand-50 text-brand-700 text-[10px] font-bold px-2 py-1 rounded border border-brand-100 uppercase tracking-wider whitespace-nowrap">
                   Topic
@@ -518,7 +532,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                 <div className="bg-blue-50 px-6 py-3 border-b border-blue-200">
                   <div className="flex items-center gap-2">
                     <span className="text-blue-700 text-sm">🏁</span>
-                    <span className="text-xs font-bold text-blue-900 uppercase tracking-wider">引言 (Introduction)</span>
+                    <span className="text-xs font-bold text-blue-900 uppercase tracking-wider">{writingMode === 'narrative' ? '开篇场景 (Opening Scene)' : '引言 (Introduction)'}</span>
                     <span className="text-[10px] text-blue-600 ml-auto">请自己尝试写作</span>
                   </div>
                 </div>
@@ -527,8 +541,13 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                   <div className="bg-blue-50/50 rounded-lg p-3 border border-blue-100">
                     <p className="text-xs font-bold text-blue-700 mb-1.5">📝 写作提示</p>
                     <ul className="text-xs text-blue-900/80 space-y-1 list-disc list-inside">
-                      <li>用 1-2 句话引出话题（可用提问、现象描述或名言引入）</li>
-                      <li>简要说明你将讨论哪几个方面，为正文做铺垫</li>
+                      {writingMode === 'narrative' ? <>
+                        <li>把读者带入故事发生的时间、地点或关键时刻</li>
+                        <li>用具体画面或动作开场，不要写论文式观点</li>
+                      </> : <>
+                        <li>用 1-2 句话引出话题（可用提问、现象描述或名言引入）</li>
+                        <li>简要说明你将讨论哪几个方面，为正文做铺垫</li>
+                      </>}
                     </ul>
                   </div>
 
@@ -536,7 +555,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                     value={assembledEssay.introduction}
                     onChange={(e) => setAssembledEssay(prev => prev ? { ...prev, introduction: e.target.value } : null)}
                     className="w-full p-4 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none resize-none text-slate-700 leading-relaxed text-sm min-h-[100px]"
-                    placeholder="Try writing your introduction here..."
+                    placeholder={writingMode === 'narrative' ? 'Try opening with the scene where your story begins...' : 'Try writing your introduction here...'}
                   />
 
                   {/* AI 范例按钮 */}
@@ -546,12 +565,12 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                       disabled={isLoadingReference}
                       className="text-xs text-blue-600 hover:text-blue-800 underline decoration-blue-200 hover:decoration-blue-400 transition-colors flex items-center gap-1"
                     >
-                      {isLoadingReference ? '正在生成范例...' : '💡 写不出来？看看AI范例'}
+                      {isLoadingReference ? '正在生成范例...' : writingMode === 'narrative' ? '💡 写不出来？看看叙事开头范例' : '💡 写不出来？看看AI范例'}
                     </button>
                   ) : aiReference && (
                     <div className="bg-blue-50 rounded-lg p-3 border border-blue-200 animate-fade-in-up">
                       <div className="flex items-center justify-between mb-1.5">
-                        <p className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">📖 AI 参考范例</p>
+                        <p className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">📖 {writingMode === 'narrative' ? '叙事开头范例' : 'AI 参考范例'}</p>
                         <button onClick={() => setShowIntroRef(false)} className="text-[10px] text-blue-600 hover:text-blue-800 underline">收起</button>
                       </div>
                       <p className="text-xs text-blue-900 leading-relaxed italic">"{aiReference.introduction}"</p>
@@ -568,7 +587,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                     <div className="flex items-center gap-2">
                       <span className="text-slate-600 text-sm">📖</span>
                       <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                        正文段落 {i + 1} — {para.dimension}
+                        {writingMode === 'narrative' ? `事件发展 ${i + 1} — ${para.dimension}` : `正文段落 ${i + 1} — ${para.dimension}`}
                       </span>
                       <span className="text-[10px] text-slate-500 ml-auto">你的原创段落</span>
                     </div>
@@ -595,7 +614,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                 <div className="bg-blue-50 px-6 py-3 border-b border-blue-200">
                   <div className="flex items-center gap-2">
                     <span className="text-blue-700 text-sm">🎯</span>
-                    <span className="text-xs font-bold text-blue-900 uppercase tracking-wider">结论 (Conclusion)</span>
+                    <span className="text-xs font-bold text-blue-900 uppercase tracking-wider">{writingMode === 'narrative' ? '结尾与回望 (Ending & Reflection)' : '结论 (Conclusion)'}</span>
                     <span className="text-[10px] text-blue-600 ml-auto">请自己尝试写作</span>
                   </div>
                 </div>
@@ -604,8 +623,13 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                   <div className="bg-blue-50/50 rounded-lg p-3 border border-blue-100">
                     <p className="text-xs font-bold text-blue-700 mb-1.5">📝 写作提示</p>
                     <ul className="text-xs text-blue-900/80 space-y-1 list-disc list-inside">
-                      <li>用 1 句话总结以上论点的核心观点</li>
-                      <li>给出你的最终立场、建议或展望</li>
+                      {writingMode === 'narrative' ? <>
+                        <li>交代这次经历最后如何结束</li>
+                        <li>写出你当时或后来产生的感受、认识或变化</li>
+                      </> : <>
+                        <li>用 1 句话总结以上论点的核心观点</li>
+                        <li>给出你的最终立场、建议或展望</li>
+                      </>}
                     </ul>
                   </div>
 
@@ -613,7 +637,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                     value={assembledEssay.conclusion}
                     onChange={(e) => setAssembledEssay(prev => prev ? { ...prev, conclusion: e.target.value } : null)}
                     className="w-full p-4 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none resize-none text-slate-700 leading-relaxed text-sm min-h-[100px]"
-                    placeholder="Try writing your conclusion here..."
+                    placeholder={writingMode === 'narrative' ? 'Try ending with what changed or what you realized...' : 'Try writing your conclusion here...'}
                   />
 
                   {/* AI 范例按钮 */}
@@ -623,12 +647,12 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                       disabled={isLoadingReference}
                       className="text-xs text-blue-600 hover:text-blue-800 underline decoration-blue-200 hover:decoration-blue-400 transition-colors flex items-center gap-1"
                     >
-                      {isLoadingReference ? '正在生成范例...' : '💡 写不出来？看看AI范例'}
+                      {isLoadingReference ? '正在生成范例...' : writingMode === 'narrative' ? '💡 写不出来？看看叙事结尾范例' : '💡 写不出来？看看AI范例'}
                     </button>
                   ) : aiReference && (
                     <div className="bg-blue-50 rounded-lg p-3 border border-blue-200 animate-fade-in-up">
                       <div className="flex items-center justify-between mb-1.5">
-                        <p className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">📖 AI 参考范例</p>
+                        <p className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">📖 {writingMode === 'narrative' ? '叙事结尾范例' : 'AI 参考范例'}</p>
                         <button onClick={() => setShowConclusionRef(false)} className="text-[10px] text-blue-600 hover:text-blue-800 underline">收起</button>
                       </div>
                       <p className="text-xs text-blue-900 leading-relaxed italic">"{aiReference.conclusion}"</p>

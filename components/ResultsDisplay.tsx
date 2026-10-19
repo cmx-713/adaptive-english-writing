@@ -1,13 +1,14 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ScaffoldContent, CollocationItem, DraftFeedback, SentenceFrame } from '../types';
+import { ScaffoldContent, CollocationItem, DraftFeedback, SentenceFrame, WritingMode } from '../types';
 import DimensionDictionary from './DimensionDictionary';
-import { validateSentence, fetchMoreCollocations, analyzeDraft } from '../services/geminiService';
+import { validateSentence, fetchMoreCollocations, fetchMoreNarrativeCollocations, analyzeDraft, analyzeNarrativeDraft } from '../services/geminiService';
 import { saveToHistory, checkIsSaved } from '../services/storageService';
 
 interface ResultsDisplayProps {
   data: ScaffoldContent;
   topic: string;
+  writingMode?: WritingMode;
   socraticQuestion?: string; // New: Pass context from step 1
   thinkingExpansion?: string[]; // 思路拓展：从 Step 1 带过来的论述角度
   onBack: () => void;
@@ -24,7 +25,8 @@ const getUsageBadge = (count: number) => {
   return { label: '🌱 初级探索者 (Novice Explorer)', color: 'bg-slate-100 text-slate-500 border-slate-200', bg: 'bg-slate-50' };
 };
 
-const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ data, topic, socraticQuestion, thinkingExpansion, onBack, isHistoryView = false, initialDraft = '', onDraftChange }) => {
+const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ data, topic, writingMode = data.writingMode || 'argumentative', socraticQuestion, thinkingExpansion, onBack, isHistoryView = false, initialDraft = '', onDraftChange }) => {
+  const isNarrative = writingMode === 'narrative';
   // Local state for collocations to support "Load More"
   const [collocations, setCollocations] = useState<CollocationItem[]>(data.collocations);
   const [isLoadingMoreCols, setIsLoadingMoreCols] = useState(false);
@@ -90,7 +92,9 @@ const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ data, topic, socraticQu
   const handleLoadMoreCollocations = async () => {
     setIsLoadingMoreCols(true);
     try {
-      const newCols = await fetchMoreCollocations(topic, data.selectedDimension, data.userIdea);
+      const newCols = isNarrative
+        ? await fetchMoreNarrativeCollocations(topic, data.selectedDimension, data.userIdea)
+        : await fetchMoreCollocations(topic, data.selectedDimension, data.userIdea);
       setCollocations(prev => [...prev, ...newCols]);
     } catch (e) {
       console.error(e);
@@ -131,7 +135,9 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
     if (!draft.trim()) return;
     setIsAnalyzing(true);
     try {
-      const result = await analyzeDraft(topic, data.selectedDimension, draft, data.vocabulary);
+      const result = isNarrative
+        ? await analyzeNarrativeDraft(topic, data.selectedDimension, draft, data.vocabulary)
+        : await analyzeDraft(topic, data.selectedDimension, draft, data.vocabulary);
       setFeedback(result);
       setIsFeedbackExpanded(true); // Auto expand on new feedback
       // Scroll to feedback (inside the sandbox container)
@@ -197,7 +203,7 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
           <div className="flex flex-col md:flex-row md:items-start gap-4 text-sm">
              <div className="flex flex-col gap-1">
                <span className="bg-brand-50 text-brand-700 text-[10px] font-bold px-2 py-0.5 rounded border border-brand-100 uppercase self-start">
-                 Selected Dimension
+                 {isNarrative ? 'Story Focus' : 'Selected Dimension'}
                </span>
                <span className="font-bold text-slate-700 text-lg">{data.selectedDimension}</span>
              </div>
@@ -209,7 +215,7 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
                 <div className="flex gap-2">
                    <span className="text-lg">💡</span>
                    <div>
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Your Idea / 你的观点</span>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{isNarrative ? 'Story Roadmap / 故事路线图' : 'Your Idea / 你的观点'}</span>
                       <p className="text-slate-600">"{data.userIdea}"</p>
                    </div>
                 </div>
@@ -243,7 +249,7 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
 
       {/* 1.5 Writing Direction Reference Card (from Step 1 thinking expansion) */}
       {thinkingExpansion && thinkingExpansion.length > 0 && (
-        <WritingDirectionCard thinkingExpansion={thinkingExpansion} userIdea={data.userIdea} />
+        <WritingDirectionCard thinkingExpansion={thinkingExpansion} userIdea={data.userIdea} isNarrative={isNarrative} />
       )}
 
       {/* 2. Split Layout: Scaffolds (Left) + Sticky Sandbox (Right) */}
@@ -335,7 +341,7 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
             <div>
               <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-2">
                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                  地道搭配 (Collocations)
+                  {isNarrative ? '叙事表达搭配 (Narrative Collocations)' : '地道搭配 (Collocations)'}
                 </h4>
                 <button 
                   onClick={handleLoadMoreCollocations}
@@ -411,10 +417,10 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
           <div className="bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden flex flex-col max-h-[calc(100vh-3rem)]">
              <div className="bg-blue-50 px-6 py-4 border-b border-blue-200 flex-shrink-0">
                <h3 className="font-serif font-bold text-lg text-blue-900 flex items-center gap-2">
-                 <span className="text-blue-800">Writing Sandbox</span> 实战演练
+                 <span className="text-blue-800">{isNarrative ? 'Story Sandbox' : 'Writing Sandbox'}</span> {isNarrative ? '叙事实战' : '实战演练'}
                </h3>
                <p className="text-xs text-blue-600 mt-1">
-                 Ready? Use materials on the left (Click to insert).
+                 {isNarrative ? 'Use the language tools to describe your scene and actions.' : 'Ready? Use materials on the left (Click to insert).'}
                </p>
              </div>
              
@@ -422,7 +428,9 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
                <textarea
                  ref={textareaRef}
                  className="w-full h-48 p-4 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none resize-none transition-all text-slate-700 placeholder-slate-400 text-sm leading-relaxed"
-                 placeholder="Start writing your paragraph here (50-100 words)..."
+                 placeholder={isNarrative
+                   ? 'Write a short scene or key moment from your story here...'
+                   : 'Start writing your paragraph here (50-100 words)...'}
                  value={draft}
                  onChange={(e) => setDraft(e.target.value)}
                />
@@ -436,7 +444,7 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
                        ? 'bg-slate-300 cursor-not-allowed' 
                        : 'bg-blue-900 hover:bg-blue-950'}`}
                  >
-                   {isAnalyzing ? 'Analyzing...' : '📝 Check My Draft'}
+                   {isAnalyzing ? 'Analyzing...' : isNarrative ? '📝 获取叙事反馈' : '📝 Check My Draft'}
                  </button>
                </div>
 
@@ -511,16 +519,16 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
       </div>
 
       {/* 3. Bottom Section: Dimension Dictionary (Horizontal) */}
-      <div className="mt-12 pt-8 border-t border-slate-200">
+      {!isNarrative && <div className="mt-12 pt-8 border-t border-slate-200">
         <DimensionDictionary currentTopic={topic} />
-      </div>
+      </div>}
 
     </div>
   );
 };
 
 // Sub-component: Writing Direction Reference Card (carried from Step 1)
-const WritingDirectionCard: React.FC<{ thinkingExpansion: string[]; userIdea: string }> = ({ thinkingExpansion, userIdea }) => {
+const WritingDirectionCard: React.FC<{ thinkingExpansion: string[]; userIdea: string; isNarrative: boolean }> = ({ thinkingExpansion, userIdea, isNarrative }) => {
   const [isExpanded, setIsExpanded] = useState(true);
 
   return (
@@ -561,7 +569,9 @@ const WritingDirectionCard: React.FC<{ thinkingExpansion: string[]; userIdea: st
           </div>
 
           <p className="text-[10px] text-amber-500 italic">
-            提示：选择 1-2 个角度作为你段落的论据，结合下方语言工具来表达。
+            {isNarrative
+              ? '提示：选择与你的故事最相关的细节，用下方语言工具写出具体场景。'
+              : '提示：选择 1-2 个角度作为你段落的论据，结合下方语言工具来表达。'}
           </p>
         </div>
       )}

@@ -23,11 +23,14 @@ export interface SentenceFrame {
 export interface InspirationCard {
   id: string;
   dimension: string;
+  narrativeRole?: NarrativeCardRole;
   socraticQuestion: string;
   hint: string;
   keywords: { en: string; zh: string }[]; // Updated: Supports EN/ZH pair
   thinkingExpansion: string[]; // 思路拓展：该维度下 3-4 个具体论述角度（中文）
 }
+
+export type NarrativeCardRole = 'scene' | 'response' | 'outcome';
 
 // Phase 2: Scaffolding
 export interface ScaffoldContent {
@@ -36,12 +39,35 @@ export interface ScaffoldContent {
   vocabulary: VocabularyItem[];
   collocations: CollocationItem[];
   frames: SentenceFrame[];
+  writingMode?: WritingMode;
 }
 
 export interface UserInput {
   topic: string;
   blindBox?: boolean;
+  writingMode?: WritingMode;
 }
+
+export type WritingMode = 'argumentative' | 'narrative';
+
+// Keep internal AI labels for prompts/storage while showing readable Chinese in the UI.
+export const getNarrativeFocusLabel = (focus: string): string => {
+  const normalized = focus.trim().toLowerCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ');
+  const labels: Record<string, string> = {
+    'anchor moment and setting': '关键时刻与场景',
+    'the key moment': '关键时刻',
+    'setting the scene': '场景铺陈',
+    'what happened next and response': '后续行动与回应',
+    'what happened next and respon': '后续行动与回应',
+    'my reaction and choice': '我的反应与选择',
+    'response and decision': '反应与选择',
+    'outcome and reflection': '结果与回望',
+    'what i realized': '我的事后理解',
+    'details i remember': '我记得的细节',
+    'a challenge i faced': '我遇到的困难'
+  };
+  return labels[normalized] || focus;
+};
 
 // 每个维度的草稿数据
 export interface DimensionDraft {
@@ -60,11 +86,13 @@ export type HistoryDataType = 'scaffold' | 'essay_grade' | 'inspiration' | 'dril
 export interface EssayHistoryData {
   essay: string;
   result: EssayGradeResult;
+  writingMode?: WritingMode;
 }
 
 export interface InspirationHistoryData {
   cards: InspirationCard[];
   userInputs: Record<string, string>;
+  writingMode?: WritingMode;
 }
 
 export interface DrillHistoryData {
@@ -135,7 +163,7 @@ export interface AggregatedError {
 }
 
 export interface ContrastivePoint {
-  category: 'Language Foundation' | 'Logical Reasoning' | 'Strategic Intent' | 'Rhetorical Structure'; // Pyramid Model Dimensions
+  category: 'Language Foundation' | 'Logical Reasoning' | 'Strategic Intent' | 'Rhetorical Structure' | 'Story Flow' | 'Narrative Detail' | 'Reflection & Closure'; // Pyramid / narrative learning dimensions
   userContent: string; // [Status Quo] - Must be FULL SENTENCE with context
   polishedContent: string; // [Elevation] - Must be exact substring of polishedEssay
   analysis: string; // [Strategic Analysis] - The 3-part deep dive

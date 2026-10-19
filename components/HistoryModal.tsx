@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { HistoryItem, ScaffoldContent, EssayHistoryData, InspirationHistoryData } from '../types';
+import { HistoryItem, ScaffoldContent, EssayHistoryData, InspirationHistoryData, getNarrativeFocusLabel } from '../types';
 
 interface HistoryModalProps {
   isOpen: boolean;
@@ -97,7 +97,7 @@ const HistoryModal: React.FC<HistoryModalProps> = ({ isOpen, onClose, history, o
                                        ? 'bg-brand-50 border-brand-200 text-brand-700' 
                                        : 'bg-slate-50 border-slate-100 text-slate-400'
                                    }`}>
-                                       {c.dimension}
+                                       {(item.data as InspirationHistoryData).writingMode === 'narrative' ? getNarrativeFocusLabel(c.dimension) : c.dimension}
                                    </span>
                                ))}
                            </div>

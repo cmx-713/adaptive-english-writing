@@ -1,10 +1,11 @@
 
 import React, { useState, useEffect } from 'react';
-import { InspirationCard, DimensionDraft } from '../types';
-import { continueIdeaCoaching, validateIdea, IdeaCoachingTurn, IdeaValidationResult } from '../services/geminiService';
+import { InspirationCard, DimensionDraft, WritingMode, getNarrativeFocusLabel } from '../types';
+import { continueIdeaCoaching, validateIdea, continueNarrativeCoaching, validateNarrativeIdea, synthesizeNarrativeRevision, IdeaCoachingTurn, IdeaValidationResult } from '../services/geminiService';
 
 interface PhaseOneCardsProps {
   topic: string;
+  writingMode?: WritingMode;
   cards: InspirationCard[];
   inputs: Record<string, string>;
   onInputChange: (id: string, value: string) => void;
@@ -28,6 +29,7 @@ const DIMENSION_VAULT = [
 
 const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
   topic,
+  writingMode = 'argumentative',
   cards,
   inputs,
   onInputChange,
@@ -39,6 +41,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
   onAddDimension,
   addingDimension = null
 }) => {
+  const isNarrative = writingMode === 'narrative';
   // Track rescue/hint visibility: { [cardId]: 'hint' | 'rescue' | null }
   const [helperState, setHelperState] = useState<Record<string, 'hint' | 'rescue' | null>>({});
 
@@ -103,7 +106,9 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
     setValidationLoading(prev => ({ ...prev, [card.id]: true }));
     setCoachingErrors(prev => ({ ...prev, [card.id]: '' }));
     try {
-      const result = await validateIdea(topic, card.dimension, input);
+      const result = isNarrative
+        ? await validateNarrativeIdea(topic, card.dimension, input, card.narrativeRole)
+        : await validateIdea(topic, card.dimension, input);
       setValidationResult(prev => ({ ...prev, [card.id]: result }));
       setCoachingAnswers(prev => ({ ...prev, [card.id]: '' }));
       setRevisedIdeas(prev => ({ ...prev, [card.id]: '' }));
@@ -137,7 +142,9 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
     setCoachingBusy(prev => ({ ...prev, [card.id]: true }));
 
     try {
-      const coachReply = await continueIdeaCoaching(topic, card.dimension, current.initialIdea || inputs[card.id] || '', answeredConversation);
+      const coachReply = isNarrative
+        ? await continueNarrativeCoaching(topic, card.dimension, current.initialIdea || inputs[card.id] || '', answeredConversation, card.narrativeRole)
+        : await continueIdeaCoaching(topic, card.dimension, current.initialIdea || inputs[card.id] || '', answeredConversation);
       const completedConversation: IdeaCoachingTurn[] = answeredConversation.map((turn, index) =>
         index === answeredConversation.length - 1
           ? { ...turn, coachFeedback: coachReply.analysis }
@@ -147,7 +154,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
       if (needsNextRound) {
         completedConversation.push({ question: coachReply.nextQuestion, hint: coachReply.nextHint });
       }
-      const nextResult: IdeaValidationResult = {
+      let nextResult: IdeaValidationResult = {
         ...pendingResult,
         status: coachReply.status,
         progressSummary: coachReply.progressSummary,
@@ -155,6 +162,20 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
         conversation: completedConversation,
         isComplete: !needsNextRound,
       };
+      if (isNarrative && !needsNextRound) {
+        const revision = await synthesizeNarrativeRevision(
+          topic,
+          card.dimension,
+          current.initialIdea || inputs[card.id] || '',
+          completedConversation,
+          coachReply.progressSummary,
+          coachReply.remainingGap
+        );
+        nextResult = { ...nextResult, revisedIdea: revision.revisedIdea };
+        // Keep the controlled textarea in sync with the generated revision.
+        // Otherwise the initial empty edit state would mask result.revisedIdea.
+        setRevisedIdeas(prev => ({ ...prev, [card.id]: revision.revisedIdea }));
+      }
       setValidationResult(prev => ({ ...prev, [card.id]: nextResult }));
       setCoachingAnswers(prev => ({ ...prev, [card.id]: '' }));
       persistCoachingResult(card.id, nextResult);
@@ -257,7 +278,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
         {isExpanded && (
           <div className="p-4">
             <p className={`text-sm leading-relaxed ${config.text} opacity-90`}>
-              <span className="font-bold text-xs uppercase tracking-wider block mb-1 opacity-60">思考诊断 · {result.focusArea || '观点分析'}</span>
+              <span className="font-bold text-xs uppercase tracking-wider block mb-1 opacity-60">思考诊断 · {result.focusArea || (isNarrative ? '故事构思' : '观点分析')}</span>
               {renderRichText(result.analysis)}
             </p>
           </div>
@@ -269,6 +290,11 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
   // Identify cards that have input
   const filledCards = cards.filter(c => (inputs[c.id] || '').trim().length > 0);
   const hasStartedThinking = Object.values(inputs).some(value => value.trim().length > 0);
+  // Narrative writing is complete only after all three story dimensions are drafted.
+  // Argumentative writing keeps its existing two-dimension threshold.
+  const completionTarget = isNarrative ? 3 : 2;
+  const draftCount = Object.keys(dimensionDrafts).length;
+  const progressComplete = draftCount >= completionTarget;
   const availableVaultDimensions = DIMENSION_VAULT.filter(dim =>
     !cards.some(card => card.dimension.toLowerCase() === dim.label.toLowerCase())
   );
@@ -291,13 +317,17 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
 
         <p className="text-slate-500 text-sm md:text-base max-w-2xl mx-auto">
           <span className="font-bold text-brand-600">元认知训练：</span>
-          先从为本题生成的不同切入点出发，写下你的第一反应（关键词或短句）。
-          <br />审辨写作思维导师会通过聚焦问题，引导你检查理由、证据与条件，不替你生成观点。
+          {isNarrative
+            ? '从为本题生成的故事构思切入点出发，写下你想讲述的场景、行动或变化。'
+            : '先从为本题生成的不同切入点出发，写下你的第一反应（关键词或短句）。'}
+          <br />{isNarrative
+            ? '审辨写作思维导师会聚焦故事细节与事件发展，引导你讲清自己的经历，不替你编写故事。'
+            : '审辨写作思维导师会通过聚焦问题，引导你检查理由、证据与条件，不替你生成观点。'}
         </p>
 
         {/* 🆕 Progress Indicator - Always Visible */}
         <div className="max-w-3xl mx-auto mt-6 mb-2">
-          <div className={`rounded-xl border-2 p-4 transition-all duration-300 ${Object.keys(dimensionDrafts).length >= 2
+          <div className={`rounded-xl border-2 p-4 transition-all duration-300 ${progressComplete
               ? 'bg-emerald-50 border-emerald-300 shadow-lg'
               : 'bg-blue-50 border-blue-200'
             }`}>
@@ -305,32 +335,43 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
               <span className="text-sm font-bold text-slate-700">
                 📝 写作进度
               </span>
-              <span className={`text-xs font-bold px-2 py-1 rounded-full ${Object.keys(dimensionDrafts).length >= 2
+              <span className={`text-xs font-bold px-2 py-1 rounded-full ${progressComplete
                   ? 'bg-emerald-200 text-emerald-800'
                   : 'bg-blue-200 text-blue-800'
                 }`}>
-                {Object.keys(dimensionDrafts).length}/2 维度已完成
+                {draftCount}/{completionTarget} {isNarrative ? '故事构思' : '维度'}已完成
               </span>
             </div>
 
             {/* Progress Bar */}
             <div className="w-full bg-slate-200 rounded-full h-2 mb-2 overflow-hidden">
               <div
-                className={`h-full transition-all duration-500 ${Object.keys(dimensionDrafts).length >= 2 ? 'bg-emerald-500' : 'bg-blue-500'
+                className={`h-full transition-all duration-500 ${progressComplete ? 'bg-emerald-500' : 'bg-blue-500'
                   }`}
-                style={{ width: `${Math.min((Object.keys(dimensionDrafts).length / 2) * 100, 100)}%` }}
+                style={{ width: `${Math.min((draftCount / completionTarget) * 100, 100)}%` }}
               />
             </div>
 
             <p className="text-xs text-slate-600">
-              {Object.keys(dimensionDrafts).length === 0 && (
-                <>💡 完成任意 <strong className="text-brand-600">2 个维度</strong>即可 AI 辅助生成完整作文</>
+              {draftCount === 0 && (
+                isNarrative
+                  ? <>💡 完成一个故事构思卡，即可进入叙事语言支架</>
+                  : <>💡 完成任意 <strong className="text-brand-600">2 个维度</strong>即可 AI 辅助生成完整作文</>
               )}
-              {Object.keys(dimensionDrafts).length === 1 && (
-                <>⏳ 再完成 <strong className="text-amber-600">1 个维度</strong>即可生成作文！</>
+              {draftCount === 1 && (
+                isNarrative
+                  ? <>✅ 已完成一个故事切入点，可继续补充构思或获取语言支架</>
+                  : <>⏳ 再完成 <strong className="text-amber-600">1 个维度</strong>即可生成作文！</>
               )}
-              {Object.keys(dimensionDrafts).length >= 2 && (
-                <>🎉 太棒了！现在可以<strong className="text-emerald-600">组合成篇</strong>了（也可继续完成更多维度）</>
+              {draftCount === 2 && (
+                isNarrative
+                  ? <>✅ 已完成场景和行动，再补充<strong className="text-emerald-600">结果与回望</strong>即可整理完整故事</>
+                  : <>🎉 太棒了！现在可以<strong className="text-emerald-600">组合成篇</strong>了（也可继续完成更多维度）</>
+              )}
+              {draftCount >= 3 && (
+                isNarrative
+                  ? <>🎉 三个故事环节已完成，现在可以<strong className="text-emerald-600">整理完整故事</strong></>
+                  : <>🎉 太棒了！现在可以<strong className="text-emerald-600">组合成篇</strong>了（也可继续完成更多维度）</>
               )}
             </p>
           </div>
@@ -362,15 +403,15 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
               <div className={`p-5 border-b border-slate-100 ${dimensionDrafts[card.id] ? 'bg-emerald-50/50' : 'bg-slate-50/50'}`}>
                 <div className="flex items-center justify-between mb-2">
                   <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-slate-200 text-slate-600">
-                    Dimension
+                    {isNarrative ? 'Story Focus' : 'Dimension'}
                   </span>
                   {dimensionDrafts[card.id] && (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200">
-                      ✅ 已写段落
+                      ✅ {isNarrative ? '已完成草稿' : '已写段落'}
                     </span>
                   )}
                 </div>
-                <h4 className="text-xl font-bold text-slate-800 leading-tight">{card.dimension}</h4>
+                <h4 className="text-xl font-bold text-slate-800 leading-tight">{isNarrative ? getNarrativeFocusLabel(card.dimension) : card.dimension}</h4>
                 {dimensionDrafts[card.id] && (
                   <p className="text-xs text-emerald-600 mt-1 line-clamp-2 italic">
                     "{dimensionDrafts[card.id].draft.substring(0, 80)}..."
@@ -382,7 +423,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
               <div className="p-5 flex-grow flex flex-col">
                 <div className="flex justify-between items-center mb-2">
                   <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                    1. 你的初步构想 (Draft Idea)
+                    {isNarrative ? '1. 你的故事初步构想 (Story Idea)' : '1. 你的初步构想 (Draft Idea)'}
                   </label>
 
                   {/* Rescue Button */}
@@ -416,7 +457,9 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                     ${isRevealed
                       ? 'bg-slate-50 border-slate-200 text-slate-600 focus:bg-white focus:border-brand-300'
                       : 'bg-white border-brand-200 focus:ring-4 focus:ring-brand-50 focus:border-brand-500 text-slate-800 placeholder-slate-300'}`}
-                  placeholder={isRevealed ? "" : "在这个维度下，你想到了什么观点？(Type here)..."}
+                  placeholder={isRevealed ? "" : isNarrative
+                    ? '在这个故事切入点下，你想讲述什么场景、行动或变化？'
+                    : '在这个维度下，你想到了什么观点？(Type here)...'}
                   value={inputVal}
                   onChange={(e) => onInputChange(card.id, e.target.value)}
                   disabled={isLoading}
@@ -443,7 +486,9 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                           ? 'bg-slate-50 text-slate-300 border-slate-100 cursor-not-allowed'
                           : 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50 hover:border-indigo-300 shadow-sm'}`}
                     >
-                      {isChecking ? 'Thinking...' : hasValidation ? '⚡ Re-Check' : '⚡ Check Idea'}
+                      {isChecking ? 'Thinking...' : hasValidation
+                        ? isNarrative ? '⚡ 重新检查构想' : '⚡ Re-Check'
+                        : isNarrative ? '⚡ 检查故事构想' : '⚡ Check Idea'}
                     </button>
                   </div>
 
@@ -492,10 +537,10 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                       {roundComplete && (result?.progressSummary || result?.remainingGap) && (
                         <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50/70 p-3 space-y-2">
                           {result.progressSummary && (
-                            <p className="text-xs text-emerald-900 leading-relaxed"><span className="font-bold">思考进展：</span>{result.progressSummary}</p>
+                          <p className="text-xs text-emerald-900 leading-relaxed"><span className="font-bold">{isNarrative ? '构思进展：' : '思考进展：'}</span>{result.progressSummary}</p>
                           )}
                           {result.remainingGap && (
-                            <p className="text-xs text-amber-900 leading-relaxed"><span className="font-bold">写作时仍需留意：</span>{result.remainingGap}</p>
+                            <p className="text-xs text-amber-900 leading-relaxed"><span className="font-bold">{isNarrative ? '故事写作时可继续补充：' : '写作时仍需留意：'}</span>{result.remainingGap}</p>
                           )}
                         </div>
                       )}
@@ -540,8 +585,10 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
 
                       {roundComplete && (
                         <div className="mb-4 space-y-2">
-                          <label className="block text-xs font-bold text-slate-600">用 1–2 句话写下修订后的中心观点（可跳过）</label>
-                          <p className="text-[11px] text-slate-500">聚焦你的主张；例子和解释可留到后续段落展开。语言支架将围绕这段观点生成，留空则沿用初步构想。</p>
+                          <label className="block text-xs font-bold text-slate-600">{isNarrative ? '整合后的故事构想（写作路线图，可编辑）' : '用 1–2 句话写下修订后的中心观点（可跳过）'}</label>
+                          <p className="text-[11px] text-slate-500">{isNarrative
+                            ? 'AI已把你的原始构想和导师追问整合成一条故事线。这不是最终作文；写作时仍需展开场景、行动、反应和结果。你可以修改这条路线图，语言支架会围绕最终内容生成。'
+                            : '聚焦你的主张；例子和解释可留到后续段落展开。语言支架将围绕这段观点生成，留空则沿用初步构想。'}</p>
                           <textarea
                             value={revisedIdeas[card.id] ?? result?.revisedIdea ?? ''}
                             onChange={e => setRevisedIdeas(prev => ({ ...prev, [card.id]: e.target.value }))}
@@ -549,7 +596,9 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                             disabled={isLoading}
                             rows={2}
                             className="w-full p-3 rounded-lg border border-emerald-200 text-sm text-slate-800 outline-none resize-y focus:ring-4 focus:ring-emerald-50 focus:border-emerald-400 disabled:bg-slate-50"
-                            placeholder="例如：Environmental protection requires cooperation among society's key actors, supported by clear policies and shared responsibilities."
+                            placeholder={isNarrative
+                              ? '可修改这条故事路线图，也可补充关键场景、行动或结果。'
+                              : "例如：Environmental protection requires cooperation among society's key actors, supported by clear policies and shared responsibilities."}
                           />
                         </div>
                       )}
@@ -568,11 +617,13 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                         {isSubmitting ? (
                           <>
                             <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                            <span>Generating Scaffolds...</span>
+                            <span>{isNarrative ? 'Generating Story Scaffolds...' : 'Generating Scaffolds...'}</span>
                           </>
                         ) : (
                           <>
-                            <span>✨</span> {roundComplete ? '获取语言支架' : '跳过追问并获取语言支架'}
+                            <span>✨</span> {isNarrative
+                              ? roundComplete ? '用路线图获取叙事表达支架' : '跳过追问并获取叙事表达支架'
+                              : roundComplete ? '获取语言支架' : '跳过追问并获取语言支架'}
                           </>
                         )}
                       </button>
@@ -589,7 +640,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
       </div>
 
       {/* Progressive dimension discovery: unlock after the student starts thinking */}
-      {onAddDimension && hasStartedThinking && availableVaultDimensions.length > 0 && (
+      {!isNarrative && onAddDimension && hasStartedThinking && availableVaultDimensions.length > 0 && (
         <div className="max-w-4xl mx-auto mt-8 border border-brand-100 rounded-xl bg-brand-50/40 overflow-hidden">
           <button
             type="button"
@@ -629,20 +680,26 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
         </div>
       )}
 
-      {/* Essay Assembly CTA - show when 2+ dimensions have drafts */}
+      {/* Assembly CTA: narratives need all three story dimensions; arguments need two. */}
       {(() => {
         const draftCount = Object.keys(dimensionDrafts).length;
-        if (draftCount >= 2) {
+        if ((isNarrative && draftCount >= 3) || (!isNarrative && draftCount >= 2)) {
           return (
             <div className="mt-12 pt-8 border-t-2 border-emerald-200 max-w-4xl mx-auto">
               <div className="bg-gradient-to-r from-emerald-50 to-brand-50 rounded-2xl p-8 border border-emerald-200 shadow-lg text-center">
                 <div className="text-4xl mb-3">📝</div>
-                <h3 className="text-2xl font-serif font-bold text-slate-800 mb-2">准备组合成文！</h3>
+                <h3 className="text-2xl font-serif font-bold text-slate-800 mb-2">
+                  {isNarrative ? '准备整理完整故事！' : '准备组合成文！'}
+                </h3>
                 <p className="text-slate-500 mb-1">
-                  你已完成 <span className="font-bold text-emerald-600">{draftCount}</span> 个维度的段落写作
+                  {isNarrative
+                    ? <>你已完成故事的<strong className="text-emerald-600">场景、行动与结果</strong>三个环节</>
+                    : <>你已完成 <span className="font-bold text-emerald-600">{draftCount}</span> 个维度的段落写作</>}
                 </p>
                 <p className="text-sm text-slate-400 mb-6">
-                  AI 将为你生成引言和结论，组合成一篇完整的 CET-4/6 作文
+                  {isNarrative
+                    ? 'AI 将帮助你整理开篇场景、事件发展和结尾与回望，形成完整故事'
+                    : 'AI 将为你生成引言和结论，组合成一篇完整的 CET-4/6 作文'}
                 </p>
 
                 {/* Draft Progress */}
@@ -652,7 +709,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                         ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
                         : 'bg-slate-50 text-slate-400 border-slate-200'
                       }`}>
-                      {dimensionDrafts[card.id] ? '✅' : '⬜'} {card.dimension}
+                      {dimensionDrafts[card.id] ? '✅' : '⬜'} {isNarrative ? getNarrativeFocusLabel(card.dimension) : card.dimension}
                     </div>
                   ))}
                 </div>
@@ -661,7 +718,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                   onClick={onAssembleEssay}
                   className="px-8 py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-lg shadow-lg hover:shadow-emerald-500/30 transition-all hover:-translate-y-0.5 flex items-center gap-2 mx-auto"
                 >
-                  <span>✨</span> 组合成文 (Assemble Essay)
+                  <span>✨</span> {isNarrative ? '整理完整故事' : '组合成文 (Assemble Essay)'}
                 </button>
               </div>
             </div>
@@ -674,14 +731,22 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
       <div className="mt-12 pt-8 border-t border-slate-200 max-w-4xl mx-auto text-center">
         <div className="mb-6">
           <h3 className="text-2xl font-serif font-bold text-slate-800">
-            {Object.keys(dimensionDrafts).length > 0 ? '继续写作其他维度' : 'Ready for Step 2?'}
+            {draftCount > 0
+              ? isNarrative
+                ? draftCount >= 3 ? '整理完整故事' : '继续完善故事构思'
+                : '继续写作其他维度'
+              : isNarrative ? '准备获取叙事语言支架？' : 'Ready for Step 2?'}
           </h3>
           <p className="text-slate-500 mt-2">
             {filledCards.length > 0
-              ? Object.keys(dimensionDrafts).length > 0
-                ? "选择下一个维度，继续写作段落。完成 2 个以上维度后可组合成文。"
-                : "选择一个切入点，获取 AI 定制的语言支架 (Vocabulary & Frames)。"
-              : "请先在上方卡片中输入你的观点，再进行下一步。"}
+              ? isNarrative
+                ? draftCount >= 3
+                  ? '三个故事环节已经完成，点击上方“整理完整故事”进入完整作文编辑。'
+                  : '选择一个故事切入点，获取与场景、行动和叙述表达相关的语言支架。'
+                : draftCount > 0
+                  ? "选择下一个维度，继续写作段落。完成 2 个以上维度后可组合成文。"
+                  : "选择一个切入点，获取 AI 定制的语言支架 (Vocabulary & Frames)。"
+              : isNarrative ? '请先写下你想讲述的场景或经历。' : '请先在上方卡片中输入你的观点，再进行下一步。'}
           </p>
         </div>
 
@@ -724,7 +789,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                       {isSubmitting ? 'AI Working...' : hasDraft ? '继续编辑 / Edit' : 'Proceed with'}
                     </div>
                     <div className={`font-bold ${isSubmitting ? 'text-brand-800' : hasDraft ? 'text-emerald-800' : 'text-slate-800 group-hover:text-brand-800'}`}>
-                      {card.dimension}
+                      {isNarrative ? getNarrativeFocusLabel(card.dimension) : card.dimension}
                     </div>
                   </div>
 
