@@ -33,6 +33,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   // 维度草稿管理
   const [dimensionDrafts, setDimensionDrafts] = useState<Record<string, DimensionDraft>>({});
   const currentDraftRef = useRef<string>(''); // 用ref追踪实时草稿，避免频繁setState
+  const draftSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 个性化思路拓展（Layer 2）：cardId -> string[]
   const [personalizedExpansions, setPersonalizedExpansions] = useState<Record<string, string[]>>({});
@@ -56,6 +57,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
 
   // 思维过程记录 ID（用于后续更新同一条记录）
   const thinkingProcessIdRef = useRef<string | null>(null);
+  const coachingTurnsRef = useRef<Record<string, any[]>>({});
 
   // Load history on mount
   const refreshHistory = () => {
@@ -82,6 +84,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     setDimensionDrafts({}); // 新topic清空草稿
     setPersonalizedExpansions({}); // 清空个性化拓展
     validationResultsRef.current = {}; // 清空累积验证结果
+    coachingTurnsRef.current = {};
     thinkingProcessIdRef.current = null; // 清空旧记录 ID
 
     try {
@@ -98,10 +101,10 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       saveToHistory(input.topic, historyData, 'inspiration');
       // Supabase 双写（异步，不阻断前端）
       if (supabaseUserId) {
-        saveInspirationToSupabase(supabaseUserId, input.topic, fetchedCards, {}).catch(() => { });
+        saveInspirationToSupabase(supabaseUserId, input.topic, fetchedCards, {}, selectedWritingMode).catch(() => { });
         // 创建思维过程记录
         console.log('[ThinkingProcess] 正在创建, userId:', supabaseUserId, 'topic:', input.topic);
-        createThinkingProcess(supabaseUserId, input.topic, fetchedCards)
+        createThinkingProcess(supabaseUserId, input.topic, fetchedCards, selectedWritingMode)
           .then(({ id, error }) => {
             if (id) {
               thinkingProcessIdRef.current = id;
@@ -168,7 +171,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       saveToHistory(currentTopic, result, 'scaffold');
       // Supabase 双写（异步，不阻断前端）
       if (supabaseUserId) {
-        saveScaffoldToSupabase(supabaseUserId, currentTopic, result).catch(() => { });
+        saveScaffoldToSupabase(supabaseUserId, currentTopic, result, writingMode).catch(() => { });
         // 词汇银行：自动将本次 scaffold 词汇入库
         if (result.vocabulary && result.vocabulary.length > 0) {
           upsertVocabularyBank(supabaseUserId, result.vocabulary, currentTopic).catch(() => { });
@@ -205,6 +208,26 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   // 草稿实时更新回调
   const handleDraftChange = (draft: string) => {
     currentDraftRef.current = draft;
+    if (!activeCard || !thinkingProcessIdRef.current) return;
+    if (draftSyncTimerRef.current) clearTimeout(draftSyncTimerRef.current);
+    draftSyncTimerRef.current = setTimeout(() => {
+      if (!thinkingProcessIdRef.current || !activeCard) return;
+      setDimensionDrafts(prev => {
+        const next = {
+          ...prev,
+          [activeCard.id]: {
+            ...(prev[activeCard.id] || {}),
+            cardId: activeCard.id,
+            dimension: activeCard.dimension,
+            userIdea: step1Inputs[activeCard.id] || '',
+            draft,
+            scaffoldData: scaffoldData || prev[activeCard.id]?.scaffoldData,
+          }
+        };
+        updateThinkingProcess(thinkingProcessIdRef.current!, { dimension_drafts: next }).catch(() => { });
+        return next;
+      });
+    }, 800);
   };
 
   // 累积的验证结果（用于合并后发送到 Supabase）
@@ -215,9 +238,15 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     const resultWithMode = { ...result, writingMode };
     // 合并到累积结果中
     validationResultsRef.current = { ...validationResultsRef.current, [cardId]: resultWithMode };
+    coachingTurnsRef.current = {
+      ...coachingTurnsRef.current,
+      [cardId]: resultWithMode.conversation || []
+    };
     if (thinkingProcessIdRef.current) {
       updateThinkingProcess(thinkingProcessIdRef.current, {
-        validation_results: validationResultsRef.current
+        writing_mode: writingMode,
+        validation_results: validationResultsRef.current,
+        coaching_turns: coachingTurnsRef.current
       }).catch(() => { });
     }
   };
@@ -325,6 +354,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
         personalizedExpansions,
         dimensionDrafts,
         assembledEssay: { introduction: '', bodyParagraphs, conclusion: '' },
+        writingMode,
       }).then(result => {
         saveCtrlScore(processId, { ...result, source: 'auto', reviewed: false });
       }).catch(() => { /* 静默处理，不影响主流程 */ });
@@ -367,7 +397,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
 
     // Supabase: 保存组合成文
     if (supabaseUserId && fullEssay.trim()) {
-      saveAssembledEssayToSupabase(supabaseUserId, currentTopic, fullEssay).catch(() => { });
+      saveAssembledEssayToSupabase(supabaseUserId, currentTopic, fullEssay, writingMode).catch(() => { });
       // 记录使用日志（含时长）
       const duration = Math.round((Date.now() - sessionStartRef.current) / 1000);
       logAgentUsage(supabaseUserId, '思维训练', 'writing_system', duration).catch(() => { });

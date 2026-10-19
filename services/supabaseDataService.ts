@@ -18,6 +18,7 @@ import {
   DrillMode,
   DrillItem,
   InspirationCard,
+  WritingMode,
 } from '../types'
 
 // ==========================================
@@ -476,7 +477,8 @@ export const setRosterEntryActive = async (id: string, is_active: boolean) => {
 export const saveScaffoldToSupabase = async (
   userId: string,
   topic: string,
-  scaffoldData: ScaffoldContent
+  scaffoldData: ScaffoldContent,
+  writingMode: WritingMode = scaffoldData.writingMode || 'argumentative'
 ) => {
   try {
     const { data, error } = await supabase
@@ -486,6 +488,7 @@ export const saveScaffoldToSupabase = async (
         topic,
         selected_dimension: scaffoldData.selectedDimension,
         user_idea: scaffoldData.userIdea,
+        writing_mode: writingMode,
         vocabulary: scaffoldData.vocabulary,
         collocations: scaffoldData.collocations,
         frames: scaffoldData.frames,
@@ -565,7 +568,8 @@ export const saveEssayGradeToSupabase = async (
   userId: string,
   topic: string,
   essay: string,
-  result: EssayGradeResult
+  result: EssayGradeResult,
+  writingMode: WritingMode = 'argumentative'
 ) => {
   try {
     const { data, error } = await supabase
@@ -574,6 +578,7 @@ export const saveEssayGradeToSupabase = async (
         user_id: userId,
         topic,
         essay,
+        writing_mode: writingMode,
         total_score: result.totalScore,
         content_score: result.subScores.content,
         organization_score: result.subScores.organization,
@@ -652,7 +657,8 @@ export const saveInspirationToSupabase = async (
   userId: string,
   topic: string,
   cards: InspirationCard[],
-  userInputs: Record<string, string>
+  userInputs: Record<string, string>,
+  writingMode: WritingMode = 'argumentative'
 ) => {
   try {
     const { data, error } = await supabase
@@ -660,6 +666,7 @@ export const saveInspirationToSupabase = async (
       .insert({
         user_id: userId,
         topic,
+        writing_mode: writingMode,
         cards,
         user_inputs: userInputs,
       })
@@ -686,7 +693,8 @@ export const saveInspirationToSupabase = async (
 export const saveAssembledEssayToSupabase = async (
   userId: string,
   topic: string,
-  assembledEssay: string
+  assembledEssay: string,
+  writingMode: WritingMode = 'argumentative'
 ) => {
   try {
     // 查找该用户该 topic 最新的 inspiration 记录
@@ -706,6 +714,7 @@ export const saveAssembledEssayToSupabase = async (
         .insert({
           user_id: userId,
           topic,
+          writing_mode: writingMode,
           cards: [],
           user_inputs: { assembled_essay: assembledEssay },
         })
@@ -723,7 +732,7 @@ export const saveAssembledEssayToSupabase = async (
 
       const { error: updateError } = await supabase
         .from('wc_inspiration_history')
-        .update({ user_inputs: updatedInputs })
+        .update({ user_inputs: updatedInputs, writing_mode: writingMode })
         .eq('id', existing.id)
 
       if (updateError) {
@@ -913,7 +922,8 @@ export const getEssayGradesByUser = async (userId: string) => {
 export const createThinkingProcess = async (
   userId: string,
   topic: string,
-  inspirationCards: any[]
+  inspirationCards: any[],
+  writingMode: WritingMode = 'argumentative'
 ) => {
   try {
     const { data, error } = await supabase
@@ -921,7 +931,9 @@ export const createThinkingProcess = async (
       .insert({
         user_id: userId,
         topic,
+        writing_mode: writingMode,
         inspiration_cards: inspirationCards,
+        coaching_turns: {},
         status: 'in_progress',
       })
       .select('id')
@@ -947,9 +959,11 @@ export const createThinkingProcess = async (
 export const updateThinkingProcess = async (
   processId: string,
   updates: {
+    writing_mode?: WritingMode
     inspiration_cards?: any[]
     user_ideas?: Record<string, string>
     validation_results?: Record<string, any>
+    coaching_turns?: Record<string, any[]>
     personalized_expansions?: Record<string, string[]>
     dimension_drafts?: Record<string, any>
     assembled_essay?: any

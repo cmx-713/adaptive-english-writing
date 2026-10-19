@@ -160,7 +160,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
     saveToHistory(effectiveTopic, historyData, 'essay_grade');
     setIsSaved(true);
     if (supabaseUserId) {
-      saveEssayGradeToSupabase(supabaseUserId, effectiveTopic, essayText, gradingResult).catch(() => { });
+      saveEssayGradeToSupabase(supabaseUserId, effectiveTopic, essayText, gradingResult, writingMode).catch(() => { });
       const duration = Math.round((Date.now() - sessionStartRef.current) / 1000);
       logAgentUsage(supabaseUserId, '作文批改', 'writing_system', duration).catch(() => { });
       sessionStartRef.current = Date.now();

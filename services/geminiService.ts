@@ -1706,6 +1706,7 @@ export interface CtrlScore {
   };
   overallComment: string;
   analyzedAt: string;
+  writingMode?: WritingMode;
 }
 
 export const analyzeCtrlScore = async (processData: {
@@ -1716,9 +1717,11 @@ export const analyzeCtrlScore = async (processData: {
   personalizedExpansions: Record<string, string[]>;
   dimensionDrafts: Record<string, any>;
   assembledEssay: any;
+  writingMode?: WritingMode;
 }): Promise<CtrlScore> => {
 
-  const { topic, inspirationCards, userIdeas, validationResults, personalizedExpansions, dimensionDrafts, assembledEssay } = processData;
+  const { topic, inspirationCards, userIdeas, validationResults, personalizedExpansions, dimensionDrafts, assembledEssay, writingMode = 'argumentative' } = processData;
+  const isNarrative = writingMode === 'narrative';
 
   // 组织 Phase 1 数据
   const phase1Text = inspirationCards.map((card: any) => {
@@ -1781,17 +1784,17 @@ export const analyzeCtrlScore = async (processData: {
   const schema: Schema = {
     type: Type.OBJECT,
     properties: {
-      opinionConsistency: { type: Type.NUMBER, description: '观点一致性得分 0-10' },
-      argumentProgression: { type: Type.NUMBER, description: '论证递进性得分 0-10' },
+      opinionConsistency: { type: Type.NUMBER, description: isNarrative ? '叙事一致性得分 0-10' : '观点一致性得分 0-10' },
+      argumentProgression: { type: Type.NUMBER, description: isNarrative ? '事件推进与连贯性得分 0-10' : '论证递进性得分 0-10' },
       linguisticAutonomy: { type: Type.NUMBER, description: '语言自主性得分 0-10' },
-      thoughtExpansion: { type: Type.NUMBER, description: '观点拓展度 0-10：评「选定方向上对AI建议的转化质量」，非是否采纳全部建议' },
+      thoughtExpansion: { type: Type.NUMBER, description: isNarrative ? '细节与回望得分 0-10：评具体细节、反思和变化的展开质量' : '观点拓展度得分 0-10：评「选定方向上对AI建议的转化质量」，非是否采纳全部建议' },
       explanations: {
         type: Type.OBJECT,
         properties: {
-          opinionConsistency: { type: Type.STRING, description: '观点一致性评分理由（2-3句）' },
-          argumentProgression: { type: Type.STRING, description: '论证递进性评分理由（2-3句）' },
+          opinionConsistency: { type: Type.STRING, description: isNarrative ? '叙事一致性评分理由（2-3句）' : '观点一致性评分理由（2-3句）' },
+          argumentProgression: { type: Type.STRING, description: isNarrative ? '事件推进与连贯性评分理由（2-3句）' : '论证递进性评分理由（2-3句）' },
           linguisticAutonomy: { type: Type.STRING, description: '语言自主性评分理由（2-3句）' },
-          thoughtExpansion: { type: Type.STRING, description: '观点拓展度理由（2-3句）：对照Phase1与终稿，写采纳方向上的深化质量；勿因未采纳某条AI建议而指责' },
+          thoughtExpansion: { type: Type.STRING, description: isNarrative ? '细节与回望理由（2-3句）：对照原始构想与终稿，评价场景细节、具体行动和事后理解的展开' : '观点拓展度理由（2-3句）：对照Phase1与终稿，写采纳方向上的深化质量；勿因未采纳某条AI建议而指责' },
         },
         required: ['opinionConsistency', 'argumentProgression', 'linguisticAutonomy', 'thoughtExpansion'],
       },
@@ -1800,7 +1803,7 @@ export const analyzeCtrlScore = async (processData: {
     required: ['opinionConsistency', 'argumentProgression', 'linguisticAutonomy', 'thoughtExpansion', 'explanations', 'overallComment'],
   };
 
-  const systemPrompt = `你是一位大学英语写作研究专家，擅长评估学生的审辨性思维在写作过程中的体现。
+  const argumentativeSystemPrompt = `你是一位大学英语写作研究专家，擅长评估学生的审辨性思维在写作过程中的体现。
 
 【评分前强制预检——必须先完成，再开始评分】
 在输出任何评分之前，请先完成以下核查：
@@ -1877,6 +1880,29 @@ ${phase3Text}
 
 请以JSON格式输出评分，所有解释必须用中文，每项理由2-3句，结合具体文本依据。`;
 
+  const narrativeSystemPrompt = `你是一位大学英语叙事写作与学习科学专家，擅长评估学生在真实写作过程中的审辨性思维。
+
+请根据以下完整过程，评价记叙文中的四项能力。不要使用议论文术语，不要求 thesis、论点、论据、反方观点或因果论证。
+
+写作题目：${topic}
+
+Phase 1：故事构思与导师追问
+${phase1Text}
+
+Phase 2：语言支架与各维度草稿
+${phase2Text || '（未到达该阶段）'}
+
+Phase 3：完整故事
+${phase3Text}
+
+评分维度：
+1. 叙事一致性（对应 opinionConsistency）：学生原始经历、导师追问后的路线图与终稿是否保持同一事件核心。
+2. 事件推进与连贯性（对应 argumentProgression）：场景、行动、反应、结果是否形成可理解的事件链，重点看是否补充了“接下来发生什么”。
+3. 语言自主性（对应 linguisticAutonomy）：终稿语言是否建立在学生自己的构想、回答和草稿基础上，是否出现与其过程明显不匹配的 AI 化替换。
+4. 细节与回望（对应 thoughtExpansion）：是否把原始概括发展成可感知的场景、具体动作、情绪变化以及事后理解；不因未采纳某条 AI 建议而扣分。
+
+评分要求：每项 0-10 分，结合追问回答和终稿证据；overallComment 用中文写 3-4 句；每项 explanations 用中文写 2-3 句；只输出 JSON。`;
+  const systemPrompt = isNarrative ? narrativeSystemPrompt : argumentativeSystemPrompt;
   const raw = await callAI(systemPrompt, '审辨信度分析', schema);
   const parsed = safeJsonParse(raw, 'analyzeCtrlScore');
 
@@ -1918,5 +1944,6 @@ ${phase3Text}
     },
     overallComment: parsed.overallComment || '',
     analyzedAt: new Date().toISOString(),
+    writingMode,
   };
 };

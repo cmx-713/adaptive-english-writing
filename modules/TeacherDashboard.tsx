@@ -86,6 +86,10 @@ const BatchCtrlModal: React.FC<{
                     personalizedExpansions: rec.personalized_expansions || {},
                     dimensionDrafts: rec.dimension_drafts || {},
                     assembledEssay: rec.assembled_essay,
+                    writingMode: rec.writing_mode === 'narrative'
+                        || (Array.isArray(rec.inspiration_cards) && rec.inspiration_cards.some((card: any) => !!card?.narrativeRole))
+                        ? 'narrative'
+                        : 'argumentative',
                 });
                 const prev = rec.ctrl_score as { source?: string; reviewed?: boolean } | null | undefined;
                 const payload = {

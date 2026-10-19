@@ -16,6 +16,7 @@ interface CtrlScoreStudentView {
   explanations?: Partial<Record<'opinionConsistency' | 'argumentProgression' | 'linguisticAutonomy' | 'thoughtExpansion', string>>;
   overallComment?: string;
   analyzedAt?: string;
+  writingMode?: 'argumentative' | 'narrative';
 }
 
 interface CtrlHistoryEntry {
@@ -23,6 +24,7 @@ interface CtrlHistoryEntry {
   topic: string;
   date: string;
   detail: CtrlScoreStudentView | null;
+  writingMode: 'argumentative' | 'narrative';
 }
 
 const CTRL_DIMS_STUDENT: readonly {
@@ -36,6 +38,13 @@ const CTRL_DIMS_STUDENT: readonly {
   { key: 'linguisticAutonomy', label: '语言自主性', weight: 25, color: '#f59e0b' },
   { key: 'thoughtExpansion', label: '观点拓展度', weight: 20, color: '#8b5cf6' },
 ];
+
+const CTRL_DIMS_NARRATIVE = [
+  { key: 'opinionConsistency' as const, label: '叙事一致性', weight: 25, color: '#3b82f6' },
+  { key: 'argumentProgression' as const, label: '事件推进与连贯性', weight: 30, color: '#10b981' },
+  { key: 'linguisticAutonomy' as const, label: '语言自主性', weight: 25, color: '#f59e0b' },
+  { key: 'thoughtExpansion' as const, label: '细节与回望', weight: 20, color: '#8b5cf6' },
+] as const;
 
 interface ProfileCenterProps {
   isActive: boolean;
@@ -936,6 +945,11 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                     topic: p.topic || '',
                     date: cs.analyzedAt || p.created_at,
                     detail: cs && typeof cs === 'object' ? cs : null,
+                    writingMode: p.writing_mode === 'narrative'
+                      || cs.writingMode === 'narrative'
+                      || (Array.isArray(p.inspiration_cards) && p.inspiration_cards.some((card: any) => !!card?.narrativeRole))
+                      ? 'narrative'
+                      : 'argumentative',
                   };
                 });
               setCtrlHistory(scored);
@@ -1197,7 +1211,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                     /* 仅1次：只显示评分卡 */
                     <div className="flex flex-col items-center justify-center h-24 gap-2">
                       <div className="text-4xl font-bold font-serif text-purple-600">{ctrlHistory[0].score.toFixed(1)}</div>
-                      <div className="text-xs text-slate-400">/ 10 · {ctrlHistory[0].topic.slice(0, 20)}{ctrlHistory[0].topic.length > 20 ? '…' : ''}</div>
+                      <div className="text-xs text-slate-400">/ 10 · {ctrlHistory[0].writingMode === 'narrative' ? '记叙文 · ' : '议论文 · '}{ctrlHistory[0].topic.slice(0, 20)}{ctrlHistory[0].topic.length > 20 ? '…' : ''}</div>
                       <div className="text-[10px] text-slate-300">完成更多思维训练后将显示成长趋势</div>
                     </div>
                   ) : (
@@ -1215,7 +1229,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                                 style={{ height: `${Math.max(pct * 0.56, 4)}px` }}
                               />
                               <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] rounded px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10 pointer-events-none">
-                                {item.topic.slice(0, 15)}{item.topic.length > 15 ? '…' : ''}
+                                {item.writingMode === 'narrative' ? '记叙文 · ' : '议论文 · '}{item.topic.slice(0, 15)}{item.topic.length > 15 ? '…' : ''}
                               </div>
                             </div>
                           );
@@ -1263,15 +1277,15 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                           onClick={() => setShowCtrlDimensions(!showCtrlDimensions)}
                           className="w-full flex items-center justify-between px-3 py-2 bg-purple-50/80 hover:bg-purple-50 border border-purple-100 rounded-lg transition-colors text-xs font-bold text-purple-800"
                         >
-                          <span>📊 {showCtrlDimensions ? '收起' : '展开'}四维得分与要点</span>
+                          <span>📊 {showCtrlDimensions ? '收起' : '展开'}{latest.writingMode === 'narrative' ? '叙事四维得分与要点' : '四维得分与要点'}</span>
                           <span className={`transform transition-transform ${showCtrlDimensions ? 'rotate-180' : ''}`}>▼</span>
                         </button>
                         {showCtrlDimensions && (
                           <div className="mt-2 p-3 bg-slate-50/80 border border-slate-100 rounded-xl space-y-3 animate-fade-in-up">
                             <p className="text-[10px] text-slate-400">
-                              以下为你最近一次思维训练（{latest.topic?.slice(0, 24)}{latest.topic && latest.topic.length > 24 ? '…' : ''}）的参考反馈；各维度满分 10 分。
+                              以下为你最近一次{latest.writingMode === 'narrative' ? '记叙文' : '议论文'}思维训练（{latest.topic?.slice(0, 24)}{latest.topic && latest.topic.length > 24 ? '…' : ''}）的参考反馈；各维度满分 10 分。
                             </p>
-                            {CTRL_DIMS_STUDENT.map(({ key, label, weight, color }) => {
+                            {(latest.writingMode === 'narrative' ? CTRL_DIMS_NARRATIVE : CTRL_DIMS_STUDENT).map(({ key, label, weight, color }) => {
                               const val = typeof d[key] === 'number' ? d[key] as number : 0;
                               const expl = d.explanations?.[key]?.trim() || '';
                               return (

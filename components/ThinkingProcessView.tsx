@@ -68,6 +68,10 @@ const CtrlScorePanel: React.FC<{
                 personalizedExpansions: processData.personalized_expansions || {},
                 dimensionDrafts: processData.dimension_drafts || {},
                 assembledEssay: processData.assembled_essay,
+                writingMode: processData.writing_mode === 'narrative'
+                    || (Array.isArray(processData.inspiration_cards) && processData.inspiration_cards.some((card: any) => !!card?.narrativeRole))
+                    ? 'narrative'
+                    : 'argumentative',
             });
             const prevAny = prev as any;
             const payload: CtrlScore & { source?: string; reviewed?: boolean } = {
