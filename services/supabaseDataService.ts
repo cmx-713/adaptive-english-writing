@@ -1271,3 +1271,21 @@ export const getThinkingProcessByUser = async (userId: string) => {
 
   return { data, error }
 }
+
+/**
+ * 获取学生最近一条尚未提交批改的写作过程，用于恢复中途退出的草稿。
+ * completed 表示已进入组合成文编辑区，仍然属于可恢复状态；只有
+ * sent_to_grader 才表示本次写作已经交给批改流程。
+ */
+export const getLatestUnfinishedThinkingProcess = async (userId: string) => {
+  const { data, error } = await supabase
+    .from('wc_thinking_process')
+    .select('*')
+    .eq('user_id', userId)
+    .neq('status', 'sent_to_grader')
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  return { data, error }
+}

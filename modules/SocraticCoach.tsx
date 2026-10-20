@@ -6,7 +6,7 @@ import ResultsDisplay from '../components/ResultsDisplay';
 import HistoryModal from '../components/HistoryModal';
 import { fetchInspirationCards, fetchLanguageScaffolds, fetchNarrativePlanningCards, fetchNarrativeLanguageScaffolds, generateEssayIntroConclusion, analyzeCtrlScore } from '../services/geminiService';
 import { getHistory, deleteFromHistory, saveToHistory, checkIsSaved } from '../services/storageService';
-import { saveScaffoldToSupabase, saveInspirationToSupabase, updateScaffoldDraft, saveAssembledEssayToSupabase, logAgentUsage, createThinkingProcess, updateThinkingProcess, saveCtrlScore, upsertVocabularyBank, upsertCollocationBank } from '../services/supabaseDataService';
+import { saveScaffoldToSupabase, saveInspirationToSupabase, updateScaffoldDraft, saveAssembledEssayToSupabase, logAgentUsage, createThinkingProcess, updateThinkingProcess, saveCtrlScore, upsertVocabularyBank, upsertCollocationBank, getLatestUnfinishedThinkingProcess } from '../services/supabaseDataService';
 import { UserInput, InspirationCard, ScaffoldContent, FlowState, HistoryItem, InspirationHistoryData, DimensionDraft, WritingMode } from '../types';
 import { IdeaValidationResult } from '../services/geminiService';
 
@@ -32,6 +32,8 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
 
   // 维度草稿管理
   const [dimensionDrafts, setDimensionDrafts] = useState<Record<string, DimensionDraft>>({});
+  const [resumeCandidate, setResumeCandidate] = useState<any | null>(null);
+  const [restoredValidationResults, setRestoredValidationResults] = useState<Record<string, IdeaValidationResult>>({});
   const currentDraftRef = useRef<string>(''); // 用ref追踪实时草稿，避免频繁setState
   const draftSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -70,6 +72,51 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     if (isHistoryOpen) refreshHistory();
   }, [isHistoryOpen]);
 
+  // 登录后检查是否有未提交的云端草稿。只展示最近一条，避免把学生带回旧任务。
+  useEffect(() => {
+    if (!supabaseUserId) {
+      setResumeCandidate(null);
+      return;
+    }
+    getLatestUnfinishedThinkingProcess(supabaseUserId)
+      .then(({ data, error }) => {
+        if (error) {
+          console.warn('[ThinkingProcess] 检查未完成草稿失败:', error.message);
+          return;
+        }
+        setResumeCandidate(data || null);
+      })
+      .catch(err => console.warn('[ThinkingProcess] 检查未完成草稿异常:', err));
+  }, [supabaseUserId]);
+
+  const resumeProcess = (process: any) => {
+    const mode: WritingMode = process.writing_mode === 'narrative' ? 'narrative' : 'argumentative';
+    const restoredCards = Array.isArray(process.inspiration_cards) ? process.inspiration_cards : [];
+    const restoredDrafts = process.dimension_drafts && typeof process.dimension_drafts === 'object'
+      ? process.dimension_drafts
+      : {};
+    const restoredResults = process.validation_results && typeof process.validation_results === 'object'
+      ? process.validation_results
+      : {};
+
+    setCurrentTopic(process.topic || '');
+    setWritingMode(mode);
+    setCards(restoredCards);
+    setStep1Inputs(process.user_ideas && typeof process.user_ideas === 'object' ? process.user_ideas : {});
+    setDimensionDrafts(restoredDrafts);
+    setRestoredValidationResults(restoredResults);
+    setPersonalizedExpansions(process.personalized_expansions || {});
+    setAssembledEssay(process.assembled_essay || null);
+    setScaffoldData(null);
+    setActiveCard(null);
+    setError(null);
+    thinkingProcessIdRef.current = process.id || null;
+    validationResultsRef.current = restoredResults;
+    coachingTurnsRef.current = process.coaching_turns || {};
+    setResumeCandidate(null);
+    setFlowState(process.assembled_essay ? 'assembling_essay' : 'selecting_card');
+  };
+
   // Step 1: Handle Topic Input -> Fetch Cards
   const handleTopicSubmit = async (input: UserInput) => {
     setFlowState('loading_cards');
@@ -82,6 +129,8 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     setAddingDimension(null);
     setStep1Inputs({});
     setDimensionDrafts({}); // 新topic清空草稿
+    setRestoredValidationResults({});
+    setResumeCandidate(null);
     setPersonalizedExpansions({}); // 清空个性化拓展
     validationResultsRef.current = {}; // 清空累积验证结果
     coachingTurnsRef.current = {};
@@ -361,6 +410,19 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     }
   };
 
+  // 组合成文阶段也持续保存，学生刷新页面或稍后回来时可从原位置继续编辑。
+  useEffect(() => {
+    if (!assembledEssay || !thinkingProcessIdRef.current) return;
+    const processId = thinkingProcessIdRef.current;
+    const timer = setTimeout(() => {
+      updateThinkingProcess(processId, {
+        assembled_essay: assembledEssay,
+        status: 'completed'
+      }).catch(() => { });
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [assembledEssay]);
+
   // 按需生成 AI 范例（点击"看看AI范例"时触发）
   const handleLoadAiReference = async (section: 'intro' | 'conclusion') => {
     // 如果已有缓存，直接展示
@@ -424,6 +486,8 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     setActiveCard(null);
     setStep1Inputs({});
     setDimensionDrafts({});
+    setRestoredValidationResults({});
+    setResumeCandidate(null);
     setPersonalizedExpansions({});
     setAssembledEssay(null);
     setAiReference(null);
@@ -490,7 +554,36 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
 
       {/* 1. Input Section */}
       {flowState === 'input_topic' && (
-        <InputSection onSubmit={handleTopicSubmit} isLoading={false} />
+        <>
+          {resumeCandidate && (
+            <div className="max-w-2xl mx-auto mb-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm no-print animate-fade-in-up">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl" aria-hidden="true">💾</span>
+                <div className="flex-1">
+                  <h3 className="font-bold text-emerald-900">发现未完成的写作草稿</h3>
+                  <p className="mt-1 text-sm leading-relaxed text-emerald-800">
+                    “{resumeCandidate.topic || '未命名主题'}” 已保存到云端，可以继续上次的维度构思、导师追问或组合成文。
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    <button
+                      onClick={() => resumeProcess(resumeCandidate)}
+                      className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition-colors hover:bg-emerald-700"
+                    >
+                      继续上次写作
+                    </button>
+                    <button
+                      onClick={() => setResumeCandidate(null)}
+                      className="rounded-lg border border-emerald-300 bg-white px-4 py-2 text-sm font-medium text-emerald-800 transition-colors hover:bg-emerald-100"
+                    >
+                      开始新主题
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          <InputSection onSubmit={handleTopicSubmit} isLoading={false} />
+        </>
       )}
 
       {/* 2. Loading Cards Animation */}
@@ -518,6 +611,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
             dimensionDrafts={dimensionDrafts}
             onAssembleEssay={handleAssembleEssay}
             onValidationComplete={handleValidationComplete}
+            initialValidationResults={restoredValidationResults}
             onAddDimension={handleAddDimension}
             addingDimension={addingDimension}
           />

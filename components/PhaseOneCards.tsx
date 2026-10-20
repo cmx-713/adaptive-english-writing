@@ -14,6 +14,7 @@ interface PhaseOneCardsProps {
   dimensionDrafts: Record<string, DimensionDraft>;  // 各维度草稿
   onAssembleEssay: () => void;                       // 组合成文回调
   onValidationComplete?: (cardId: string, result: IdeaValidationResult) => void; // 观点验证完成回调
+  initialValidationResults?: Record<string, IdeaValidationResult>; // 从未完成草稿恢复导师追问结果
   onAddDimension?: (dimension: string) => void;
   addingDimension?: string | null;
 }
@@ -38,6 +39,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
   dimensionDrafts,
   onAssembleEssay,
   onValidationComplete,
+  initialValidationResults = {},
   onAddDimension,
   addingDimension = null
 }) => {
@@ -69,6 +71,17 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
   useEffect(() => {
     setShowMoreDimensions(false);
   }, [topic]);
+
+  // 恢复草稿时还原导师追问、修订构想和反馈展开状态，避免学生重新回答已经完成的问题。
+  useEffect(() => {
+    setValidationResult(initialValidationResults);
+    setRevisedIdeas(Object.fromEntries(
+      Object.entries(initialValidationResults).map(([id, result]) => [id, result.revisedIdea || ''])
+    ));
+    setFeedbackExpanded(Object.fromEntries(
+      Object.keys(initialValidationResults).map(id => [id, true])
+    ));
+  }, [topic, initialValidationResults]);
 
   const handleSubmit = (card: InspirationCard) => {
     const revisedIdea = revisedIdeas[card.id] ?? validationResult[card.id]?.revisedIdea ?? '';
