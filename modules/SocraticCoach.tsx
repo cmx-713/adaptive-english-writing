@@ -501,10 +501,34 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   // History Handlers
   const handleSelectHistoryItem = (item: HistoryItem) => {
     if (item.dataType === 'scaffold') {
+      const scaffold = item.data as ScaffoldContent;
+      const relatedInspiration = historyItems.find(historyItem =>
+        historyItem.dataType === 'inspiration' && historyItem.topic === item.topic
+      );
+      const inspiration = relatedInspiration?.data as InspirationHistoryData | undefined;
+      const restoredCards = Array.isArray(inspiration?.cards)
+        ? inspiration.cards
+        : currentTopic === item.topic ? cards : [];
+      const matchingCard = restoredCards.find(card =>
+        card.dimension.trim().toLowerCase() === scaffold.selectedDimension.trim().toLowerCase()
+      ) || null;
+      const restoredInputs = inspiration?.userInputs && typeof inspiration.userInputs === 'object'
+        ? { ...inspiration.userInputs }
+        : {};
+
       setCurrentTopic(item.topic);
-      setScaffoldData(item.data as ScaffoldContent);
-      setWritingMode((item.data as ScaffoldContent).writingMode || 'argumentative');
-      setActiveCard(null);
+      setScaffoldData(scaffold);
+      setWritingMode(scaffold.writingMode || inspiration?.writingMode || 'argumentative');
+      setCards(restoredCards);
+      setDimensionDrafts({});
+      setRestoredValidationResults({});
+      thinkingProcessIdRef.current = null;
+      if (matchingCard && !restoredInputs[matchingCard.id]) {
+        restoredInputs[matchingCard.id] = scaffold.userIdea || '';
+      }
+      setStep1Inputs(restoredInputs);
+      setActiveCard(matchingCard);
+      currentDraftRef.current = '';
       setFlowState('showing_result');
       setIsHistoryOpen(false);
     } else if (item.dataType === 'inspiration') {
