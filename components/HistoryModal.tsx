@@ -43,6 +43,11 @@ const HistoryModal: React.FC<HistoryModalProps> = ({ isOpen, onClose, history, o
             history.map((item) => {
               const isEssay = item.dataType === 'essay_grade';
               const isInspiration = item.dataType === 'inspiration';
+              const inspirationData = isInspiration ? item.data as Partial<InspirationHistoryData> : null;
+              const inspirationCards = Array.isArray(inspirationData?.cards) ? inspirationData.cards : [];
+              const inspirationInputs = inspirationData?.userInputs && typeof inspirationData.userInputs === 'object'
+                ? inspirationData.userInputs
+                : {};
               
               return (
                 <div 
@@ -87,19 +92,21 @@ const HistoryModal: React.FC<HistoryModalProps> = ({ isOpen, onClose, history, o
                                  Step 1 Draft
                                </span>
                                <span className="text-xs text-slate-400">
-                                 {Object.keys((item.data as InspirationHistoryData).userInputs).length} ideas drafted
+                                 {Object.keys(inspirationInputs).length} ideas drafted
                                </span>
                            </div>
-                           <div className="flex gap-2 mt-2">
-                               {(item.data as InspirationHistoryData).cards.map(c => (
+                           <div className="flex gap-2 mt-2 flex-wrap">
+                               {inspirationCards.length > 0 ? inspirationCards.map(c => (
                                    <span key={c.id} className={`text-xs px-2 py-1 rounded border ${
-                                       (item.data as InspirationHistoryData).userInputs[c.id] 
-                                       ? 'bg-brand-50 border-brand-200 text-brand-700' 
+                                       inspirationInputs[c.id]
+                                       ? 'bg-brand-50 border-brand-200 text-brand-700'
                                        : 'bg-slate-50 border-slate-100 text-slate-400'
                                    }`}>
-                                       {(item.data as InspirationHistoryData).writingMode === 'narrative' ? getNarrativeFocusLabel(c.dimension) : c.dimension}
+                                       {inspirationData?.writingMode === 'narrative' ? getNarrativeFocusLabel(c.dimension) : c.dimension}
                                    </span>
-                               ))}
+                               )) : (
+                                 <span className="text-xs text-slate-400">该历史记录缺少维度信息，仍可查看主题</span>
+                               )}
                            </div>
                         </>
                     ) : (

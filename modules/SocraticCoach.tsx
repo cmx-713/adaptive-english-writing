@@ -508,11 +508,11 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       setFlowState('showing_result');
       setIsHistoryOpen(false);
     } else if (item.dataType === 'inspiration') {
-      const data = item.data as InspirationHistoryData;
+      const data = item.data as Partial<InspirationHistoryData>;
       setCurrentTopic(item.topic);
       setWritingMode(data.writingMode || 'argumentative');
-      setCards(data.cards);
-      setStep1Inputs(data.userInputs);
+      setCards(Array.isArray(data.cards) ? data.cards : []);
+      setStep1Inputs(data.userInputs && typeof data.userInputs === 'object' ? data.userInputs : {});
       setFlowState('selecting_card');
       setIsHistoryOpen(false);
     }
