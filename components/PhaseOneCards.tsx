@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { InspirationCard, DimensionDraft, WritingMode, getNarrativeFocusLabel } from '../types';
 import { continueIdeaCoaching, validateIdea, continueNarrativeCoaching, validateNarrativeIdea, synthesizeNarrativeRevision, IdeaCoachingTurn, IdeaValidationResult } from '../services/geminiService';
+import UiIcon from './UiIcon';
 
 interface PhaseOneCardsProps {
   topic: string;
@@ -20,12 +21,12 @@ interface PhaseOneCardsProps {
 }
 
 const DIMENSION_VAULT = [
-  { label: 'Environment', icon: '🌱' },
-  { label: 'Tech', icon: '⚡' },
-  { label: 'Health', icon: '🏥' },
-  { label: 'Psychology', icon: '🧠' },
-  { label: 'Education', icon: '📚' },
-  { label: 'Ethics', icon: '⚖️' },
+  { label: 'Environment' },
+  { label: 'Tech' },
+  { label: 'Health' },
+  { label: 'Psychology' },
+  { label: 'Education' },
+  { label: 'Ethics' },
 ];
 
 const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
@@ -231,28 +232,28 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
       exceptional: {
         bg: "bg-purple-50",
         border: "border-purple-200",
-        icon: "🌟",
+        icon: "idea" as const,
         text: "text-purple-900",
         titleColor: "text-purple-700"
       },
       valid: {
         bg: "bg-emerald-50",
         border: "border-emerald-200",
-        icon: "✅",
+        icon: "success" as const,
         text: "text-emerald-800",
         titleColor: "text-emerald-700"
       },
       weak: {
         bg: "bg-amber-50",
         border: "border-amber-200",
-        icon: "💡",
+        icon: "help" as const,
         text: "text-amber-800",
         titleColor: "text-amber-700"
       },
       off_topic: {
         bg: "bg-rose-50",
         border: "border-rose-200",
-        icon: "🧭",
+        icon: "alert" as const,
         text: "text-rose-800",
         titleColor: "text-rose-700"
       }
@@ -264,26 +265,26 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
         <div
           onClick={(e) => toggleFeedbackExpanded(e, id)}
           className={`px-4 py-2 flex items-center gap-2 border-b ${isExpanded ? config.border : 'border-transparent'} bg-white/50 cursor-pointer hover:bg-white/80 transition-colors select-none`}
-          title={isExpanded ? "Click to collapse" : "Click to view detailed analysis"}
+          title={isExpanded ? "收起诊断" : "展开诊断"}
         >
-          <span className="text-lg">{config.icon}</span>
+          <UiIcon name={config.icon} size={18} className={config.titleColor} />
           <span className={`font-bold text-sm flex-grow ${config.titleColor}`}>
             {result.feedbackTitle}
             <span className="text-xs font-normal opacity-60 ml-2">
-              {isExpanded ? '(Click to collapse)' : '... (Click to view analysis)'}
+              {isExpanded ? '收起' : '查看详情'}
             </span>
           </span>
 
           {/* Exceptional Badge (if applicable) */}
           {result.status === 'exceptional' && (
             <span className="hidden sm:inline-block mr-2 text-[10px] bg-purple-100 text-purple-700 px-2 py-1 rounded-full font-bold uppercase tracking-wider border border-purple-200">
-              High Five! 🙌
+              表现突出
             </span>
           )}
 
           {/* Chevron Icon */}
           <span className={`text-slate-400 transform transition-transform duration-200 ${isExpanded ? 'rotate-180' : 'rotate-0'}`}>
-            ▼
+            <UiIcon name="chevronDown" size={16} />
           </span>
         </div>
 
@@ -316,12 +317,12 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
     <div className="space-y-8 animate-fade-in-up pb-12">
       <div className="text-center relative">
         {/* Step Indicator */}
-        <h3 className="text-2xl font-serif font-bold text-slate-800 mb-2">Step 1: 预测与联想 (Prediction)</h3>
+        <h3 className="text-2xl font-bold text-slate-800 mb-2">第一步：预测与联想</h3>
 
         {/* Topic Display */}
         <div className="max-w-3xl mx-auto my-4 bg-white border border-slate-200 rounded-lg p-3 shadow-sm inline-flex items-center gap-3">
           <span className="bg-brand-50 text-brand-700 text-[10px] font-bold px-2 py-1 rounded border border-brand-100 uppercase tracking-wider whitespace-nowrap">
-            当前题目 / Topic
+            当前题目
           </span>
           <span className="font-bold text-slate-800 text-lg md:text-xl line-clamp-1 text-left">
             {topic}
@@ -346,7 +347,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
             }`}>
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-bold text-slate-700">
-                📝 写作进度
+                写作进度
               </span>
               <span className={`text-xs font-bold px-2 py-1 rounded-full ${progressComplete
                   ? 'bg-emerald-200 text-emerald-800'
@@ -368,23 +369,23 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
             <p className="text-xs text-slate-600">
               {draftCount === 0 && (
                 isNarrative
-                  ? <>💡 完成一个故事构思卡，即可进入叙事语言支架</>
-                  : <>💡 完成任意 <strong className="text-brand-600">2 个维度</strong>即可 AI 辅助生成完整作文</>
+                  ? <>完成一个故事构思卡，即可进入叙事语言支架</>
+                  : <>完成任意 <strong className="text-brand-600">2 个维度</strong>即可进入组合成文</>
               )}
               {draftCount === 1 && (
                 isNarrative
-                  ? <>✅ 已完成一个故事切入点，可继续补充构思或获取语言支架</>
+                  ? <>已完成一个故事切入点，可继续补充构思或获取语言支架</>
                   : <>⏳ 再完成 <strong className="text-amber-600">1 个维度</strong>即可生成作文！</>
               )}
               {draftCount === 2 && (
                 isNarrative
-                  ? <>✅ 已完成场景和行动，再补充<strong className="text-emerald-600">结果与回望</strong>即可整理完整故事</>
-                  : <>🎉 太棒了！现在可以<strong className="text-emerald-600">组合成篇</strong>了（也可继续完成更多维度）</>
+                  ? <>已完成场景和行动，再补充<strong className="text-emerald-700">结果与回望</strong>即可整理完整故事</>
+                  : <>已完成构思，可以<strong className="text-emerald-700">组合成篇</strong>（也可继续完成更多维度）</>
               )}
               {draftCount >= 3 && (
                 isNarrative
-                  ? <>🎉 三个故事环节已完成，现在可以<strong className="text-emerald-600">整理完整故事</strong></>
-                  : <>🎉 太棒了！现在可以<strong className="text-emerald-600">组合成篇</strong>了（也可继续完成更多维度）</>
+                  ? <>三个故事环节已完成，现在可以<strong className="text-emerald-700">整理完整故事</strong></>
+                  : <>构思已完成，现在可以<strong className="text-emerald-700">组合成篇</strong>（也可继续完成更多维度）</>
               )}
             </p>
           </div>
@@ -416,11 +417,11 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
               <div className={`p-5 border-b border-slate-100 ${dimensionDrafts[card.id] ? 'bg-emerald-50/50' : 'bg-slate-50/50'}`}>
                 <div className="flex items-center justify-between mb-2">
                   <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-slate-200 text-slate-600">
-                    {isNarrative ? 'Story Focus' : 'Dimension'}
+                    {isNarrative ? '故事切入点' : '写作维度'}
                   </span>
                   {dimensionDrafts[card.id] && (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200">
-                      ✅ {isNarrative ? '已完成草稿' : '已写段落'}
+                      {isNarrative ? '已完成草稿' : '已写段落'}
                     </span>
                   )}
                 </div>
@@ -634,7 +635,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                           </>
                         ) : (
                           <>
-                            <span>✨</span> {isNarrative
+                            {isNarrative
                               ? roundComplete ? '用路线图获取叙事表达支架' : '跳过追问并获取叙事表达支架'
                               : roundComplete ? '获取语言支架' : '跳过追问并获取语言支架'}
                           </>
@@ -683,7 +684,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                         : 'bg-white text-slate-700 border-slate-200 hover:border-brand-300 hover:text-brand-700'
                     }`}
                   >
-                    {addingDimension === dim.label ? '生成中…' : `${dim.icon} ${dim.label}`}
+                    {addingDimension === dim.label ? '生成中…' : dim.label}
                   </button>
                 ))}
               </div>
@@ -699,9 +700,8 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
         if ((isNarrative && draftCount >= 3) || (!isNarrative && draftCount >= 2)) {
           return (
             <div className="mt-12 pt-8 border-t-2 border-emerald-200 max-w-4xl mx-auto">
-              <div className="bg-gradient-to-r from-emerald-50 to-brand-50 rounded-2xl p-8 border border-emerald-200 shadow-lg text-center">
-                <div className="text-4xl mb-3">📝</div>
-                <h3 className="text-2xl font-serif font-bold text-slate-800 mb-2">
+              <div className="bg-white rounded-lg p-6 border border-emerald-200 shadow-sm text-center">
+                <h3 className="text-xl font-bold text-slate-800 mb-2">
                   {isNarrative ? '准备整理完整故事！' : '准备组合成文！'}
                 </h3>
                 <p className="text-slate-500 mb-1">
@@ -722,16 +722,16 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                         ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
                         : 'bg-slate-50 text-slate-400 border-slate-200'
                       }`}>
-                      {dimensionDrafts[card.id] ? '✅' : '⬜'} {isNarrative ? getNarrativeFocusLabel(card.dimension) : card.dimension}
+                      {dimensionDrafts[card.id] ? '已完成 · ' : '待完成 · '}{isNarrative ? getNarrativeFocusLabel(card.dimension) : card.dimension}
                     </div>
                   ))}
                 </div>
 
                 <button
                   onClick={onAssembleEssay}
-                  className="px-8 py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-lg shadow-lg hover:shadow-emerald-500/30 transition-all hover:-translate-y-0.5 flex items-center gap-2 mx-auto"
+                  className="px-6 py-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded-md font-bold text-base shadow-sm transition-colors flex items-center gap-2 mx-auto"
                 >
-                  <span>✨</span> {isNarrative ? '整理完整故事' : '组合成文 (Assemble Essay)'}
+                  <UiIcon name="essay" size={18} />{isNarrative ? '整理完整故事' : '组合成文'}
                 </button>
               </div>
             </div>
@@ -748,7 +748,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
               ? isNarrative
                 ? draftCount >= 3 ? '整理完整故事' : '继续完善故事构思'
                 : '继续写作其他维度'
-              : isNarrative ? '准备获取叙事语言支架？' : 'Ready for Step 2?'}
+              : isNarrative ? '获取叙事语言支架' : '进入第二步'}
           </h3>
           <p className="text-slate-500 mt-2">
             {filledCards.length > 0
@@ -758,7 +758,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                   : '选择一个故事切入点，获取与场景、行动和叙述表达相关的语言支架。'
                 : draftCount > 0
                   ? "选择下一个维度，继续写作段落。完成 2 个以上维度后可组合成文。"
-                  : "选择一个切入点，获取 AI 定制的语言支架 (Vocabulary & Frames)。"
+                  : "选择一个切入点，查看相关词汇和表达句型。"
               : isNarrative ? '请先写下你想讲述的场景或经历。' : '请先在上方卡片中输入你的观点，再进行下一步。'}
           </p>
         </div>
@@ -799,23 +799,21 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
 
                   <div className="flex-1">
                     <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">
-                      {isSubmitting ? 'AI Working...' : hasDraft ? '继续编辑 / Edit' : 'Proceed with'}
+                      {isSubmitting ? '正在准备支架' : hasDraft ? '继续编辑' : '选择切入点'}
                     </div>
                     <div className={`font-bold ${isSubmitting ? 'text-brand-800' : hasDraft ? 'text-emerald-800' : 'text-slate-800 group-hover:text-brand-800'}`}>
                       {isNarrative ? getNarrativeFocusLabel(card.dimension) : card.dimension}
                     </div>
                   </div>
 
-                  {!isSubmitting && (
-                    <span className={`text-xl transition-colors ${hasDraft ? 'text-emerald-300 group-hover:text-emerald-500' : 'text-slate-300 group-hover:text-brand-500'}`}>→</span>
-                  )}
+                  {!isSubmitting && <UiIcon name="arrowRight" size={18} className={hasDraft ? 'text-emerald-600' : 'text-slate-400'} />}
                 </button>
               );
             })}
           </div>
         ) : (
           <div className="inline-block px-6 py-3 bg-slate-50 border border-slate-200 rounded-lg text-slate-400 text-sm">
-            ✏️ Waiting for your input above...
+            请先填写上方的构想。
           </div>
         )}
       </div>

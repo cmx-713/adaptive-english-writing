@@ -6,6 +6,7 @@ import { saveEssayGradeToSupabase, logAgentUsage } from '../services/supabaseDat
 import { EssayGradeResult, HistoryItem, EssayHistoryData, WritingMode } from '../types';
 import HistoryModal from '../components/HistoryModal';
 import GradingReport from '../components/GradingReport';
+import UiIcon from '../components/UiIcon';
 
 // OPTIMIZATION: Exam Timer Component
 const ExamTimer: React.FC<{ isActive: boolean; onToggle: () => void }> = ({ isActive, onToggle }) => {
@@ -42,7 +43,7 @@ const ExamTimer: React.FC<{ isActive: boolean; onToggle: () => void }> = ({ isAc
           : 'bg-white text-slate-500 border-slate-200 hover:text-slate-700'
           }`}
       >
-        {isActive ? '⏹ Stop Timer' : '⏱️ Exam Mode (30m)'}
+        {isActive ? '停止计时' : '限时练习（30 分钟）'}
       </button>
     </div>
   );
@@ -263,7 +264,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
             onClick={() => setIsHistoryOpen(true)}
             className="text-sm font-medium text-slate-500 hover:text-blue-900 transition-colors flex items-center gap-1 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm"
           >
-            <span>📂</span> Graded Essays History
+            <UiIcon name="folder" size={16} /> 批改记录
           </button>
         </div>
 
@@ -280,12 +281,12 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
           <div className="p-8 space-y-6">
             {/* Topic Input */}
             <div>
-              <label className="block text-sm font-bold text-slate-700 mb-2">写作题目 (Optional)</label>
+              <label className="block text-sm font-bold text-slate-700 mb-2">写作题目（选填）</label>
               <input
                 type="text"
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
-                placeholder="e.g., The Importance of Traditional Culture"
+                placeholder="例如：The Importance of Traditional Culture"
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none transition-all"
               />
             </div>
@@ -310,10 +311,10 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
 
             {error && (
               <div className="bg-red-50 text-red-600 p-4 rounded-xl text-center text-sm border border-red-100">
-                <p className="font-bold mb-1">⚠️ Error</p>
+                <p className="font-bold mb-1">发生错误</p>
                 <p>{error}</p>
                 {error.includes("API Key") && (
-                  <p className="text-xs mt-2 text-slate-500">Go to Settings (top right) to enter your API key or configure it in Netlify.</p>
+                  <p className="text-xs mt-2 text-slate-500">请在右上角设置中检查服务配置。</p>
                 )}
               </div>
             )}
@@ -329,10 +330,10 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
               {isGrading ? (
                 <>
                   <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                  教授阅卷中 (Grading)...
+                  正在批改…
                 </>
               ) : (
-                <>✨ 提交批改 (Submit for Review)</>
+                <>提交批改</>
               )}
             </button>
 
@@ -340,7 +341,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
             {error && (
               <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl text-red-700">
                 <div className="flex items-start gap-3">
-                  <span className="text-red-500 text-xl flex-shrink-0">⚠️</span>
+                  <UiIcon name="alert" className="text-red-500 flex-shrink-0" />
                   <div>
                     <p className="font-bold text-sm mb-1">批改失败</p>
                     <p className="text-sm">{error}</p>
@@ -380,12 +381,12 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
     return (
       <div className="max-w-2xl mx-auto">
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="h-1.5 bg-gradient-to-r from-blue-900 via-blue-700 to-blue-500" />
+          <div className="h-1 border-b border-slate-100" />
           <div className="p-8">
             {selfEvalStep === 'evaluating' ? (
               <>
                 <div className="text-center mb-8">
-                  <div className="w-14 h-14 bg-blue-50 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-4">🪞</div>
+                  <div className="w-12 h-12 bg-blue-50 rounded-md flex items-center justify-center mx-auto mb-4"><UiIcon name="activity" size={22} className="text-blue-800" /></div>
                   <h2 className="text-xl font-bold text-slate-800 mb-2">先评估一下自己的作文</h2>
                   <p className="text-slate-500 text-sm">AI 正在后台批改，趁这个时候先给自己打个分。<br />自评与 AI 评的差距本身就是很好的学习素材。</p>
                 </div>
@@ -530,7 +531,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
     console.error('[EssayGrader] 渲染崩溃:', renderErr);
     return (
       <div className="max-w-2xl mx-auto bg-white rounded-2xl border border-rose-200 shadow-sm p-8 text-center">
-        <div className="w-14 h-14 rounded-2xl bg-rose-50 flex items-center justify-center text-3xl mx-auto mb-4">⚠️</div>
+        <div className="w-12 h-12 rounded-md bg-rose-50 flex items-center justify-center mx-auto mb-4"><UiIcon name="alert" size={22} className="text-rose-700" /></div>
         <h2 className="text-lg font-bold text-slate-800 mb-2">批改结果显示异常</h2>
         <p className="text-sm text-slate-500 mb-6">AI 返回的数据结构不完整，无法正常显示。点击下方按钮重新批改。</p>
         <button onClick={reset} className="px-6 py-2.5 rounded-xl bg-blue-900 text-white font-bold hover:bg-blue-950 transition-colors">

@@ -172,7 +172,7 @@ const BatchCtrlModal: React.FC<{
                                     </p>
                                 </div>
                             ) : includeReanalyze ? (
-                                <p className="text-sm font-medium text-slate-600">该班暂无已完成「组合成文」的思维训练记录。</p>
+                                <p className="text-sm font-medium text-slate-600">该班暂无已完成「组合成文」的审辨写作训练记录。</p>
                             ) : (
                                 <div className="text-sm font-medium text-emerald-700 space-y-1">
                                     <p>{selectedClass} 在「仅补缺」模式下暂无待分析记录（均已有过审辨信度）。</p>
@@ -408,7 +408,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
         filtered.students.forEach((s: any) => { studentMap[s.id] = s; });
 
         const rows: string[][] = [
-            ['姓名', '学号', '班级', '作文批改次数', '平均分', '最高分', '最低分', '句子特训次数', '思维训练次数', '审辨信度均分'],
+            ['姓名', '学号', '班级', '作文批改次数', '平均分', '最高分', '最低分', '句子特训次数', '审辨写作训练次数', '审辨信度均分'],
         ];
 
         filtered.students.forEach((s: any) => {

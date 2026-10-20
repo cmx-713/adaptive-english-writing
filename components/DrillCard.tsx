@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { DrillItem, DrillMode } from '../types';
+import UiIcon from './UiIcon';
 
 interface DrillCardProps {
   item: DrillItem;
@@ -183,7 +184,7 @@ const DrillCard: React.FC<DrillCardProps> = ({ item, onAnswer, isAnswered }) => 
            <div className={`p-6 border-t animate-fade-in-up ${selectedOption === item.correctOption ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100'}`}>
               <div className="flex items-start gap-3">
                  <div className={`text-2xl ${selectedOption === item.correctOption ? 'text-emerald-500' : 'text-amber-500'}`}>
-                    {selectedOption === item.correctOption ? '🎉' : '💡'}
+                    <UiIcon name={selectedOption === item.correctOption ? 'success' : 'idea'} size={22} />
                  </div>
                  <div>
                     <h4 className={`font-bold mb-1 ${selectedOption === item.correctOption ? 'text-emerald-800' : 'text-amber-800'}`}>

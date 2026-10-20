@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { fetchDimensionKeywords } from '../services/geminiService';
+import UiIcon from './UiIcon';
 
 interface DimensionDictionaryProps {
   currentTopic?: string;
@@ -13,14 +14,14 @@ interface KeywordItem {
 }
 
 const COMMON_DIMENSIONS = [
-  { id: 'econ', label: 'Economic', icon: '💰' },
-  { id: 'env', label: 'Environment', icon: '🌱' },
-  { id: 'soc', label: 'Social', icon: '👥' },
-  { id: 'tech', label: 'Tech', icon: '⚡' },
-  { id: 'health', label: 'Health', icon: '🏥' },
-  { id: 'psy', label: 'Psychology', icon: '🧠' },
-  { id: 'edu', label: 'Education', icon: '📚' },
-  { id: 'ethics', label: 'Ethics', icon: '⚖️' },
+  { id: 'econ', label: '经济', query: 'Economic', icon: 'wallet' as const },
+  { id: 'env', label: '环境', query: 'Environment', icon: 'leaf' as const },
+  { id: 'soc', label: '社会', query: 'Social', icon: 'users' as const },
+  { id: 'tech', label: '科技', query: 'Tech', icon: 'zap' as const },
+  { id: 'health', label: '健康', query: 'Health', icon: 'health' as const },
+  { id: 'psy', label: '心理', query: 'Psychology', icon: 'idea' as const },
+  { id: 'edu', label: '教育', query: 'Education', icon: 'education' as const },
+  { id: 'ethics', label: '伦理', query: 'Ethics', icon: 'scale' as const },
 ];
 
 const DimensionDictionary: React.FC<DimensionDictionaryProps> = ({ currentTopic }) => {
@@ -28,7 +29,7 @@ const DimensionDictionary: React.FC<DimensionDictionaryProps> = ({ currentTopic 
   const [keywords, setKeywords] = useState<Record<string, KeywordItem[]>>({});
   const [loading, setLoading] = useState<string | null>(null);
 
-  const handleDimensionClick = async (label: string) => {
+  const handleDimensionClick = async (label: string, queryLabel: string) => {
     if (activeDim === label) {
       setActiveDim(null); // Toggle off
       return;
@@ -39,7 +40,7 @@ const DimensionDictionary: React.FC<DimensionDictionaryProps> = ({ currentTopic 
     if (!keywords[label]) {
       setLoading(label);
       try {
-        const result = await fetchDimensionKeywords(label, currentTopic);
+        const result = await fetchDimensionKeywords(queryLabel, currentTopic);
         setKeywords(prev => ({ ...prev, [label]: result }));
       } catch (e) {
         console.error(e);
@@ -53,10 +54,10 @@ const DimensionDictionary: React.FC<DimensionDictionaryProps> = ({ currentTopic 
     <div className="bg-slate-100/50 rounded-2xl p-6 border border-slate-200">
        <div className="flex flex-col md:flex-row md:items-center gap-4 mb-6">
           <div className="flex items-center gap-2">
-            <span className="text-xl">🎒</span>
+            <UiIcon name="book" size={20} className="text-slate-600" />
             <div>
               <h3 className="font-bold text-lg text-slate-800 leading-none">维度宝库</h3>
-              <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-wider">Dimension Dictionary</p>
+              <p className="text-xs text-slate-500 mt-1">按角度拓展观点</p>
             </div>
           </div>
           <p className="text-xs text-slate-500 border-l border-slate-200 pl-4 ml-2">
@@ -70,13 +71,13 @@ const DimensionDictionary: React.FC<DimensionDictionaryProps> = ({ currentTopic 
          {COMMON_DIMENSIONS.map((dim) => (
            <div key={dim.id} className="relative group">
              <button
-               onClick={() => handleDimensionClick(dim.label)}
+               onClick={() => handleDimensionClick(dim.label, dim.query)}
                className={`w-full h-full flex flex-col items-center justify-center p-3 rounded-xl border transition-all duration-200 min-h-[80px]
                  ${activeDim === dim.label 
                    ? 'bg-white border-brand-400 ring-2 ring-brand-100 shadow-md transform -translate-y-1' 
                    : 'bg-white border-slate-200 hover:border-brand-300 hover:shadow-sm'}`}
              >
-               <span className="text-2xl mb-1">{dim.icon}</span>
+               <UiIcon name={dim.icon} size={20} className="mb-1 text-slate-500" />
                <span className={`text-xs font-bold ${activeDim === dim.label ? 'text-brand-700' : 'text-slate-600'}`}>{dim.label}</span>
                
                {activeDim === dim.label && (

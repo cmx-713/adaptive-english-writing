@@ -19,7 +19,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ essays, drills, scaffolds, usageLog
     const stats = useMemo(() => {
         // 模块使用占比
         const moduleData = [
-            { name: '🧠 思维训练', value: scaffolds.length },
+            { name: '审辨写作训练', value: scaffolds.length },
             { name: '✍️ 作文批改', value: essays.length },
             { name: '🏋️ 句子特训', value: drills.length },
         ].filter(d => d.value > 0);

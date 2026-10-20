@@ -1,4 +1,5 @@
 import React from 'react';
+import UiIcon from './UiIcon';
 
 interface ErrorBoundaryProps {
     children: React.ReactNode;
@@ -37,8 +38,8 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
         if (this.state.hasError) {
             return (
                 <div className="min-h-[300px] flex flex-col items-center justify-center p-8 text-center">
-                    <div className="w-16 h-16 rounded-2xl bg-rose-50 flex items-center justify-center text-3xl mb-4">
-                        ⚠️
+                    <div className="w-12 h-12 rounded-lg bg-rose-50 flex items-center justify-center text-rose-700 mb-4">
+                        <UiIcon name="alert" size={24} />
                     </div>
                     <h3 className="text-lg font-bold text-slate-800 mb-2">
                         {this.props.fallbackMessage || '页面加载出错'}
@@ -60,7 +61,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
                         onClick={this.handleRetry}
                         className="px-6 py-2 bg-blue-900 text-white text-sm font-bold rounded-lg hover:bg-blue-800 transition-colors shadow-sm"
                     >
-                        🔄 重试
+                        <UiIcon name="refresh" size={16} className="mr-2 inline-block align-[-3px]" />重试
                     </button>
                 </div>
             );

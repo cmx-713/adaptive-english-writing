@@ -4,6 +4,7 @@ import { ScaffoldContent, CollocationItem, DraftFeedback, SentenceFrame, Writing
 import DimensionDictionary from './DimensionDictionary';
 import { validateSentence, fetchMoreCollocations, fetchMoreNarrativeCollocations, analyzeDraft, analyzeNarrativeDraft } from '../services/geminiService';
 import { saveToHistory, checkIsSaved } from '../services/storageService';
+import UiIcon from './UiIcon';
 
 interface ResultsDisplayProps {
   data: ScaffoldContent;
@@ -19,10 +20,10 @@ interface ResultsDisplayProps {
 
 // Badge Logic Helper
 const getUsageBadge = (count: number) => {
-  if (count >= 5) return { label: '🏆 表达大师 (Expression Master)', color: 'bg-amber-100 text-amber-700 border-amber-200', bg: 'bg-amber-50' };
-  if (count >= 3) return { label: '🚀 进阶写手 (Rising Writer)', color: 'bg-indigo-100 text-indigo-700 border-indigo-200', bg: 'bg-indigo-50' };
-  if (count >= 1) return { label: '🦋 语言学徒 (Language Apprentice)', color: 'bg-sky-100 text-sky-700 border-sky-200', bg: 'bg-sky-50' };
-  return { label: '🌱 初级探索者 (Novice Explorer)', color: 'bg-slate-100 text-slate-500 border-slate-200', bg: 'bg-slate-50' };
+  if (count >= 5) return { label: '表达熟练', color: 'bg-amber-100 text-amber-700 border-amber-200', bg: 'bg-amber-50' };
+  if (count >= 3) return { label: '稳步提升', color: 'bg-indigo-100 text-indigo-700 border-indigo-200', bg: 'bg-indigo-50' };
+  if (count >= 1) return { label: '开始练习', color: 'bg-sky-100 text-sky-700 border-sky-200', bg: 'bg-sky-50' };
+  return { label: '待开始', color: 'bg-slate-100 text-slate-500 border-slate-200', bg: 'bg-slate-50' };
 };
 
 const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ data, topic, writingMode = data.writingMode || 'argumentative', socraticQuestion, thinkingExpansion, onBack, isHistoryView = false, initialDraft = '', onDraftChange }) => {
@@ -203,7 +204,7 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
           <div className="flex flex-col md:flex-row md:items-start gap-4 text-sm">
              <div className="flex flex-col gap-1">
                <span className="bg-brand-50 text-brand-700 text-[10px] font-bold px-2 py-0.5 rounded border border-brand-100 uppercase self-start">
-                 {isNarrative ? 'Story Focus' : 'Selected Dimension'}
+                 {isNarrative ? '故事切入点' : '当前维度'}
                </span>
                <span className="font-bold text-slate-700 text-lg">{data.selectedDimension}</span>
              </div>
@@ -213,7 +214,7 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
              <div className="flex-1 space-y-2">
                 {/* User Idea */}
                 <div className="flex gap-2">
-                   <span className="text-lg">💡</span>
+                   <UiIcon name="idea" className="text-amber-600" />
                    <div>
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{isNarrative ? 'Story Roadmap / 故事路线图' : 'Your Idea / 你的观点'}</span>
                       <p className="text-slate-600">"{data.userIdea}"</p>
@@ -234,7 +235,8 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
                     ? 'bg-green-50 text-green-600 cursor-default' 
                     : 'bg-slate-100 text-slate-600 hover:bg-brand-50 hover:text-brand-600'}`}
                >
-                <span>{isSaved ? '✓ Saved' : '♥ Save to History'}</span>
+                <UiIcon name={isSaved ? 'success' : 'save'} size={16} />
+                <span>{isSaved ? '已保存' : '保存记录'}</span>
                </button>
            )}
 
@@ -242,7 +244,8 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
              onClick={handleCopyToClipboard}
              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold bg-slate-800 text-white hover:bg-slate-700 transition-all shadow-md hover:shadow-lg"
            >
-             <span>{copyStatus === 'copied' ? '✅ Copied!' : '📋 Copy All'}</span>
+             <UiIcon name={copyStatus === 'copied' ? 'success' : 'copy'} size={16} />
+             <span>{copyStatus === 'copied' ? '已复制' : '复制全部'}</span>
            </button>
         </div>
       </div>
@@ -429,8 +432,8 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
                  ref={textareaRef}
                  className="w-full h-48 p-4 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none resize-none transition-all text-slate-700 placeholder-slate-400 text-sm leading-relaxed"
                  placeholder={isNarrative
-                   ? 'Write a short scene or key moment from your story here...'
-                   : 'Start writing your paragraph here (50-100 words)...'}
+                   ? '写下故事中的一个场景或关键时刻…'
+                   : '在此写下你的段落…'}
                  value={draft}
                  onChange={(e) => setDraft(e.target.value)}
                />
@@ -444,7 +447,7 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
                        ? 'bg-slate-300 cursor-not-allowed' 
                        : 'bg-blue-900 hover:bg-blue-950'}`}
                  >
-                   {isAnalyzing ? 'Analyzing...' : isNarrative ? '📝 获取叙事反馈' : '📝 Check My Draft'}
+                   {isAnalyzing ? '分析中…' : isNarrative ? '获取叙事反馈' : '检查我的草稿'}
                  </button>
                </div>
 
@@ -458,7 +461,7 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
                    >
                       <div className="flex items-center gap-3">
                          <span className="text-xl font-bold text-blue-900">{feedback.score}<span className="text-xs text-blue-600">/10</span></span>
-                         <span className="text-xs font-bold text-blue-900 uppercase">Coach's Feedback</span>
+                         <span className="text-xs font-bold text-blue-900">导师反馈</span>
                       </div>
                       <span className={`text-blue-600 transform transition-transform duration-200 ${isFeedbackExpanded ? 'rotate-180' : 'rotate-0'}`}>▼</span>
                    </div>
@@ -474,7 +477,7 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
                         {/* Improvements */}
                         <div className="bg-amber-50 rounded-lg p-3 border border-amber-100">
                             <h4 className="text-amber-800 font-bold text-xs mb-2 flex items-center gap-1">
-                              <span>🔨</span> Suggestions
+                              修改建议
                             </h4>
                             <ul className="list-disc list-inside space-y-1 text-xs text-amber-900/80">
                               {feedback.suggestions.map((s, i) => (
@@ -486,7 +489,7 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
                         {/* Polished Version */}
                         <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-100">
                             <h4 className="text-emerald-800 font-bold text-xs mb-2 flex items-center gap-1">
-                              <span>✨</span> Polished Version
+                              <span>润色版本</span>
                             </h4>
                             <p className="text-xs text-emerald-900/80 leading-relaxed italic">
                               "{feedback.polishedVersion}"
@@ -497,14 +500,14 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
                         <div className={`flex items-center justify-between p-3 rounded-lg border ${usageBadge.color} bg-opacity-30 ${usageBadge.bg}`}>
                             <div className="flex flex-col">
                                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                                    语料达成度 (Corpus Badge)
+                                    支架使用情况
                                 </span>
                                 <div className="text-xs font-bold">
                                     {usageBadge.label}
                                 </div>
                             </div>
                             <div className="text-2xl font-bold opacity-30">
-                                {totalUsedCount} <span className="text-[10px] font-normal">items</span>
+                                {totalUsedCount} <span className="text-[10px] font-normal">项</span>
                             </div>
                         </div>
 
@@ -556,7 +559,7 @@ const WritingDirectionCard: React.FC<{ thinkingExpansion: string[]; userIdea: st
           {/* Thinking Expansion Points */}
           <div>
             <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wider flex items-center gap-1 mb-2">
-              💡 可以展开的角度
+              可以展开的角度
             </span>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
               {thinkingExpansion.map((point, i) => (
@@ -637,7 +640,7 @@ const InteractiveFrame: React.FC<{ frame: SentenceFrame, topic: string }> = ({ f
     <div className="p-4 bg-blue-50/30 rounded-xl border border-blue-100 text-sm text-slate-800 leading-relaxed shadow-sm">
       {/* Frame Header: Pattern Name */}
       <div className="flex items-center gap-2 mb-3 pb-2 border-b border-blue-100/60">
-        <span className="text-blue-700 text-base">🏗️</span>
+        <UiIcon name="book" className="text-blue-700" />
         <span className="font-bold text-blue-900 text-xs">{frame.patternName}</span>
         <span className="text-slate-400 text-xs">—</span>
         <span className="text-slate-600 text-xs">{frame.patternNameZh}</span>
@@ -671,7 +674,7 @@ const InteractiveFrame: React.FC<{ frame: SentenceFrame, topic: string }> = ({ f
            disabled={isChecking}
            className="text-xs bg-blue-100 hover:bg-blue-200 text-blue-900 px-4 py-1.5 rounded-full font-medium transition-colors flex items-center gap-1"
          >
-           {isChecking ? '正在检查...' : '✨ 检查 (Check)'}
+           {isChecking ? '正在检查…' : '检查句子'}
          </button>
       </div>
 
@@ -681,14 +684,14 @@ const InteractiveFrame: React.FC<{ frame: SentenceFrame, topic: string }> = ({ f
           {/* Feedback */}
           <div className={`px-3 py-2.5 rounded-lg border ${validation.isValid ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
             <div className="flex items-start gap-2">
-              <span className="text-base mt-0.5">{validation.isValid ? '✅' : '⚠️'}</span>
+              <UiIcon name={validation.isValid ? 'success' : 'alert'} className="mt-0.5" />
               <div className="flex-1">
                 <p className={`text-xs leading-relaxed ${validation.isValid ? 'text-green-800' : 'text-amber-800'}`}>
                   {validation.feedback}
                 </p>
                 {validation.suggestion && (
                   <p className="text-xs text-slate-600 mt-1.5 pt-1.5 border-t border-slate-100">
-                    <span className="font-bold text-blue-900">💡 建议：</span>{validation.suggestion}
+                    <span className="font-bold text-blue-900">建议：</span>{validation.suggestion}
                   </p>
                 )}
               </div>

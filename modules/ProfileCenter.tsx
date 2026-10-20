@@ -5,6 +5,7 @@ import ResultsDisplay from '../components/ResultsDisplay';
 import GradingReport from '../components/GradingReport';
 import { getThinkingProcessByUser, getEssayGradesByUser, getVocabularyBank, deleteVocabBankEntry, VocabBankEntry, upsertVocabularyBank, getCollocationBank, deleteCollocationBankEntry, CollocationBankEntry, upsertCollocationBank } from '../services/supabaseDataService';
 import { computeMilestones } from '../services/milestones';
+import UiIcon, { type UiIconName } from '../components/UiIcon';
 
 /** 学习中心展示用：与 Supabase ctrl_score JSON 对齐的宽松类型（避免依赖 LLM 运行时模块） */
 interface CtrlScoreStudentView {
@@ -54,10 +55,10 @@ interface ProfileCenterProps {
 // --- 1. 外部组件定义 (防止 undefined 报错) ---
 
 // StatCard: 核心数据卡片
-const StatCard = ({ icon, label, value, colorClass, desc }: { icon: string, label: string, value: number, colorClass: string, desc: string }) => (
+const StatCard = ({ icon, label, value, colorClass, desc }: { icon: UiIconName, label: string, value: number, colorClass: string, desc: string }) => (
   <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-start gap-4">
-    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-3xl shadow-sm ${colorClass}`}>
-      {icon}
+    <div className={`w-11 h-11 rounded-md flex items-center justify-center shadow-sm ${colorClass}`}>
+      <UiIcon name={icon} size={21} />
     </div>
     <div>
       <div className="text-3xl font-bold text-slate-800 mb-1">{value}</div>
@@ -412,17 +413,18 @@ const DimensionTrendMini: React.FC<{
 
   // 计算趋势（最后一次 vs. 第一次）
   const trend = points[points.length - 1].score - points[0].score;
-  const trendIcon = trend > 0 ? '📈' : trend < 0 ? '📉' : '➡️';
+  const trendIcon: UiIconName = trend > 0 ? 'chart' : trend < 0 ? 'activity' : 'arrowRight';
   const trendColor = trend > 0 ? 'text-emerald-600' : trend < 0 ? 'text-rose-600' : 'text-slate-400';
 
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1">
-          <span className="text-sm">{dimension.icon}</span>
+          <UiIcon name="chart" size={14} className="text-slate-500" />
           <span className="text-xs font-bold text-slate-700">{dimension.label}</span>
         </div>
-        <span className={`text-xs font-mono font-bold ${trendColor}`}>
+        <span className={`text-xs font-mono font-bold ${trendColor} inline-flex items-center gap-1`}>
+          <UiIcon name={trendIcon} size={13} />
           {points[points.length - 1].score}/{dimension.max}
         </span>
       </div>
@@ -646,7 +648,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
       ];
       const weakest = normalized.sort((a, b) => a.val - b.val)[0];
       const adviceMap: Record<string, string> = {
-        'content': "建议回到【思维训练】环节，加强多维度审题练习。",
+        'content': "建议回到【审辨写作训练】环节，加强多维度审题练习。",
         'organization': "建议使用【句式工坊】特训，加强逻辑连接词运用。",
         'proficiency': "建议使用【表达升格】特训，积累高级同义替换。",
         'clarity': "建议使用【语法门诊】特训，修复基础句法漏洞。"
@@ -666,7 +668,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
   const getTrainingConfig = (category: CritiqueCategory) => {
     const configs = {
       'Content': {
-        mode: '思维训练',
+        mode: '审辨写作训练',
         modeEn: 'Socratic Coach',
         focus: '多维度审题与论证展开',
         duration: '10-15分钟',
@@ -1022,7 +1024,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
 
   const getBadgeConfig = (type: string) => {
     switch (type) {
-      case 'scaffold': return { label: '🧠 思维训练', style: 'bg-brand-50 text-brand-700 border-brand-200' };
+      case 'scaffold': return { label: '审辨写作训练', style: 'bg-brand-50 text-brand-700 border-brand-200' };
       case 'essay_grade': return { label: '✍️ 作文批改', style: 'bg-indigo-50 text-indigo-700 border-indigo-200' };
       case 'drill': return { label: '🏋️ 句子特训', style: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
       default: return { label: '📝 记录', style: 'bg-slate-50 text-slate-600 border-slate-200' };
@@ -1044,7 +1046,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
     <div className="animate-fade-in-up max-w-5xl mx-auto">
       {/* Header */}
       <div className="text-center mb-10">
-        <h2 className="text-3xl font-serif font-bold text-slate-800 mb-4">学习数据中心 <span className="text-blue-900">Learning Hub</span></h2>
+        <h2 className="text-3xl font-bold text-slate-800 mb-4">学习数据中心</h2>
         <p className="text-slate-500 text-lg">追踪你的每一次思考与进步</p>
       </div>
 
@@ -1054,17 +1056,16 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
         <>
           {/* 1. Core Stats */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            <StatCard icon="🧠" label="思维训练" value={stats.socraticCount} colorClass="bg-blue-50 text-blue-800" desc="Topics Explored" />
-            <StatCard icon="✍️" label="作文批改" value={stats.graderCount} colorClass="bg-blue-50 text-blue-800" desc="Essays Graded" />
-            <StatCard icon="🏋️" label="句子特训" value={stats.drillCount} colorClass="bg-blue-50 text-blue-800" desc="Skills Mastered" />
+            <StatCard icon="brain" label="审辨写作训练" value={stats.socraticCount} colorClass="bg-blue-50 text-blue-800" desc="累计训练次数" />
+            <StatCard icon="essay" label="作文批改" value={stats.graderCount} colorClass="bg-blue-50 text-blue-800" desc="累计批改篇数" />
+            <StatCard icon="drills" label="句子特训" value={stats.drillCount} colorClass="bg-blue-50 text-blue-800" desc="累计练习次数" />
           </div>
 
           {/* 1.5 学习里程碑徽章（纯展示，不改变任何业务逻辑） */}
           <div className="mb-8 rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
             <div className="flex items-center gap-2 mb-3">
-              <span className="text-lg" aria-hidden>🏅</span>
+              <UiIcon name="success" size={18} className="text-emerald-700" />
               <h3 className="font-bold text-slate-800 text-sm">学习里程碑</h3>
-              <span className="text-[10px] text-slate-400 uppercase tracking-wider">Milestones</span>
             </div>
             <p className="text-xs text-slate-500 mb-3 leading-relaxed">
               达成条件后自动点亮；悬停可查看说明。数据来自本机学习记录与（若已登录）云端作文与审辨信度。
@@ -1212,7 +1213,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                     <div className="flex flex-col items-center justify-center h-24 gap-2">
                       <div className="text-4xl font-bold font-serif text-purple-600">{ctrlHistory[0].score.toFixed(1)}</div>
                       <div className="text-xs text-slate-400">/ 10 · {ctrlHistory[0].writingMode === 'narrative' ? '记叙文 · ' : '议论文 · '}{ctrlHistory[0].topic.slice(0, 20)}{ctrlHistory[0].topic.length > 20 ? '…' : ''}</div>
-                      <div className="text-[10px] text-slate-300">完成更多思维训练后将显示成长趋势</div>
+                      <div className="text-[10px] text-slate-300">完成更多审辨写作训练后将显示成长趋势</div>
                     </div>
                   ) : (
                     /* ≥2次：显示趋势图 */
@@ -1283,7 +1284,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                         {showCtrlDimensions && (
                           <div className="mt-2 p-3 bg-slate-50/80 border border-slate-100 rounded-xl space-y-3 animate-fade-in-up">
                             <p className="text-[10px] text-slate-400">
-                              以下为你最近一次{latest.writingMode === 'narrative' ? '记叙文' : '议论文'}思维训练（{latest.topic?.slice(0, 24)}{latest.topic && latest.topic.length > 24 ? '…' : ''}）的参考反馈；各维度满分 10 分。
+                              以下为你最近一次{latest.writingMode === 'narrative' ? '记叙文' : '议论文'}审辨写作训练（{latest.topic?.slice(0, 24)}{latest.topic && latest.topic.length > 24 ? '…' : ''}）的参考反馈；各维度满分 10 分。
                             </p>
                             {(latest.writingMode === 'narrative' ? CTRL_DIMS_NARRATIVE : CTRL_DIMS_STUDENT).map(({ key, label, weight, color }) => {
                               const val = typeof d[key] === 'number' ? d[key] as number : 0;
@@ -1450,7 +1451,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                       </div>
                     ) : (
                       <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm py-8">
-                        {vocabBank.length === 0 ? '完成一次思维训练后，词汇将自动入库' : '未找到匹配词汇'}
+                        {vocabBank.length === 0 ? '完成一次审辨写作训练后，词汇将自动入库' : '未找到匹配词汇'}
                       </div>
                     );
                   })()
@@ -1476,7 +1477,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                     </div>
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm py-8">
-                      完成一次思维训练后，搭配将自动入库
+                      完成一次审辨写作训练后，搭配将自动入库
                     </div>
                   )
                 )}

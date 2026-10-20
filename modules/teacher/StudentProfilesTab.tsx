@@ -372,18 +372,18 @@ const StudentProfilesTab: React.FC<StudentProfilesTabProps> = ({
                                                     <div>
                                                         <h4 className="text-sm font-bold text-slate-700 mb-2">📋 模块完成度</h4>
                                                         <div className="space-y-2 text-xs">
-                                                            <div className="flex justify-between"><span className="text-slate-600">🧠 思维训练</span><span className="font-bold">{s.scaffoldCount} 次</span></div>
+                                                            <div className="flex justify-between"><span className="text-slate-600">审辨写作训练</span><span className="font-bold">{s.scaffoldCount} 次</span></div>
                                                             <div className="flex justify-between"><span className="text-slate-600">✍️ 作文批改</span><span className="font-bold">{s.essayCount} 次</span></div>
                                                             <div className="flex justify-between"><span className="text-slate-600">🏋️ 句子特训</span><span className="font-bold">{s.drillCount} 次</span></div>
                                                         </div>
                                                     </div>
                                                 </div>
 
-                                                {/* 思维训练过程 */}
+                                                {/* 审辨写作训练过程 */}
                                                 {s.thinkingProcesses && s.thinkingProcesses.length > 0 && (
                                                     <div className="lg:col-span-3 bg-white rounded-xl border border-slate-200 p-4">
                                                         <h4 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
-                                                            🧠 思维训练过程
+                                                            审辨写作训练过程
                                                             <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full font-bold">
                                                                 {s.thinkingProcessCount} 次
                                                             </span>

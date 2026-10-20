@@ -5,28 +5,26 @@ import { fetchDrillItems } from '../services/geminiService';
 import { getAggregatedUserErrors, getAggregatedUserVocab, saveToHistory } from '../services/storageService';
 import { saveDrillResultToSupabase, logAgentUsage } from '../services/supabaseDataService';
 import DrillCard from '../components/DrillCard';
+import UiIcon, { type UiIconName } from '../components/UiIcon';
 
-const MODES: { id: DrillMode; label: string; icon: string; desc: string; color: string }[] = [
+const MODES: { id: DrillMode; label: string; icon: UiIconName; desc: string }[] = [
   {
     id: 'grammar_doctor',
-    label: '语法门诊 (Grammar Doctor)',
-    icon: '🩺',
-    desc: '专治顽固语法错误，巩固语言准确性。',
-    color: 'from-blue-700 to-blue-900'
+    label: '语法诊断',
+    icon: 'clipboard',
+    desc: '针对常见语法问题，巩固语言准确性。'
   },
   {
     id: 'elevation_lab',
-    label: '表达升格 (Elevation Lab)',
-    icon: '⚗️',
-    desc: '使用高级词汇替换平庸表达，提升学术感。',
-    color: 'from-blue-700 to-blue-900'
+    label: '表达提升',
+    icon: 'activity',
+    desc: '尝试更准确、自然的词语和表达方式。'
   },
   {
     id: 'structure_architect',
-    label: '句式工坊 (Structure Architect)',
-    icon: '🏗️',
-    desc: '训练长难句合并与逻辑连接能力。',
-    color: 'from-blue-700 to-blue-900'
+    label: '句式训练',
+    icon: 'book',
+    desc: '练习句子组合与逻辑衔接。'
   },
 ];
 
@@ -236,8 +234,8 @@ const SentenceDrills: React.FC<SentenceDrillsProps> = ({ supabaseUserId }) => {
                 {isRecommended && (
                   <div className="absolute top-3 right-3 px-2 py-0.5 bg-blue-600 text-white text-[10px] font-bold rounded-full">推荐</div>
                 )}
-                <div className={`absolute top-0 left-0 w-full h-1 bg-gradient-to-r ${mode.color}`}></div>
-                <div className="text-4xl mb-4 group-hover:scale-110 transition-transform duration-300 inline-block">{mode.icon}</div>
+                <div className="absolute top-0 left-0 w-full h-1 bg-blue-700"></div>
+                <div className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-slate-100 text-slate-700"><UiIcon name={mode.icon} size={21} /></div>
                 <h3 className="text-xl font-bold text-slate-800 mb-2">{mode.label}</h3>
                 <p className="text-slate-500 text-sm leading-relaxed">{mode.desc}</p>
                 {isRecommended && pendingConfig && pendingConfig.errors.length > 0 && (
@@ -254,7 +252,7 @@ const SentenceDrills: React.FC<SentenceDrillsProps> = ({ supabaseUserId }) => {
         </div>
 
         <div className="text-center mt-12 text-xs text-slate-400">
-          * 请先使用“思维训练”和“作文批改”功能来积累你的自适应数据。
+          * 请先使用“审辨写作训练”和“作文批改”功能来积累你的自适应数据。
         </div>
       </div>
     );
@@ -276,7 +274,7 @@ const SentenceDrills: React.FC<SentenceDrillsProps> = ({ supabaseUserId }) => {
     return (
       <div className="max-w-md mx-auto text-center pt-10 animate-fade-in-up">
         <div className="inline-flex items-center justify-center w-24 h-24 rounded-full bg-emerald-100 text-emerald-600 text-4xl mb-6 shadow-inner">
-          🏆
+          <UiIcon name="success" size={34} />
         </div>
         <h2 className="text-3xl font-bold text-slate-800 mb-2">训练完成！</h2>
         <p className="text-slate-500 mb-8">本次得分：{score} / {items.length}</p>

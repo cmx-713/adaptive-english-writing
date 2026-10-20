@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { analyzeCtrlScore, CtrlScore } from '../services/geminiService';
 import { saveCtrlScore, markCtrlReviewed } from '../services/supabaseDataService';
 import { getNarrativeFocusLabel } from '../types';
+import UiIcon, { type UiIconName } from './UiIcon';
 
 interface ThinkingProcessViewProps {
     processes: any[];
@@ -135,7 +136,7 @@ const CtrlScorePanel: React.FC<{
     return (
         <div className="mt-3 border border-slate-200 rounded-xl overflow-hidden bg-white">
             {/* 标题栏 + 总分 */}
-            <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-slate-50 to-white border-b border-slate-100">
+            <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-100">
                 <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-bold text-slate-700">🔍 审辨信度</span>
                     {/* 来源标签 */}
@@ -236,22 +237,22 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
     if (!processes || processes.length === 0) {
         return (
             <div className="text-center text-slate-400 py-6 text-sm">
-                暂无思维训练过程数据
+                暂无审辨写作训练过程数据
             </div>
         );
     }
 
-    const statusConfig: Record<string, { label: string; color: string; icon: string }> = {
-        in_progress: { label: '进行中', color: 'bg-amber-100 text-amber-700 border-amber-200', icon: '⏳' },
-        completed: { label: '已完成', color: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: '✅' },
-        sent_to_grader: { label: '已送批改', color: 'bg-blue-100 text-blue-700 border-blue-200', icon: '📝' },
+    const statusConfig: Record<string, { label: string; color: string; icon: UiIconName }> = {
+        in_progress: { label: '进行中', color: 'bg-amber-100 text-amber-700 border-amber-200', icon: 'timer' },
+        completed: { label: '已完成', color: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: 'success' },
+        sent_to_grader: { label: '已送批改', color: 'bg-blue-100 text-blue-700 border-blue-200', icon: 'essay' },
     };
 
-    const validationStatusConfig: Record<string, { icon: string; color: string }> = {
-        exceptional: { icon: '🌟', color: 'text-purple-700 bg-purple-50 border-purple-200' },
-        valid: { icon: '✅', color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
-        weak: { icon: '💡', color: 'text-amber-700 bg-amber-50 border-amber-200' },
-        off_topic: { icon: '🧭', color: 'text-rose-700 bg-rose-50 border-rose-200' },
+    const validationStatusConfig: Record<string, { icon: UiIconName; color: string }> = {
+        exceptional: { icon: 'success', color: 'text-purple-700 bg-purple-50 border-purple-200' },
+        valid: { icon: 'success', color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
+        weak: { icon: 'idea', color: 'text-amber-700 bg-amber-50 border-amber-200' },
+        off_topic: { icon: 'alert', color: 'text-rose-700 bg-rose-50 border-rose-200' },
     };
 
     return (
@@ -305,7 +306,7 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                                     ))}
                                 </div>
                                 <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${status.color}`}>
-                                    {status.icon} {status.label}
+                                    <UiIcon name={status.icon} size={13} /> {status.label}
                                 </span>
                             </div>
                         </div>
@@ -327,8 +328,8 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
 
                                     {/* Phase 1: 写作构思 */}
                                     <TimelineSection
-                                        icon="💡"
-                                        title={isNarrativeProcess ? 'Phase 1: 故事构思' : 'Phase 1: 观点构思'}
+                                        icon="idea"
+                                        title={isNarrativeProcess ? '第一步：故事构思' : '第一步：观点构思'}
                                         subtitle={`${cards.length} 个${isNarrativeProcess ? '故事切入点' : '维度'}卡片`}
                                         isActive={hasIdeas}
                                     >
@@ -351,7 +352,7 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                                                                 <span className="text-xs font-bold text-slate-600">{isNarrativeCard ? getNarrativeFocusLabel(card.dimension) : card.dimension}</span>
                                                                 {validation && vConfig && (
                                                                     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold border ${vConfig.color}`}>
-                                                                        {vConfig.icon} {validation.feedbackTitle}
+                                                                        <UiIcon name={vConfig.icon} size={13} /> {validation.feedbackTitle}
                                                                     </span>
                                                                 )}
                                                             </div>
@@ -434,8 +435,8 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
 
                                     {/* Phase 2: 语言支架 + 草稿 */}
                                     <TimelineSection
-                                        icon="🏗️"
-                                        title="Phase 2: 语言支架 + 草稿"
+                                        icon="book"
+                                        title="第二步：语言支架与草稿"
                                         subtitle={`${Object.keys(drafts).length} 个${isNarrativeProcess ? '故事切入点' : '维度'}有草稿`}
                                         isActive={hasDrafts}
                                     >
@@ -481,8 +482,8 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
 
                                     {/* Phase 3: 组合成文 */}
                                     <TimelineSection
-                                        icon="📄"
-                                        title="Phase 3: 组合成文"
+                                        icon="essay"
+                                        title="第三步：组合成文"
                                         subtitle={hasEssay ? '已完成' : '未到达'}
                                         isActive={hasEssay}
                                         isLast
@@ -526,7 +527,7 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
 
 // 时间线节点组件
 const TimelineSection: React.FC<{
-    icon: string;
+    icon: UiIconName;
     title: string;
     subtitle: string;
     isActive: boolean;
@@ -536,7 +537,7 @@ const TimelineSection: React.FC<{
     <div className={`relative pl-8 ${isLast ? '' : 'pb-4'}`}>
         {/* 圆点 */}
         <div className={`absolute left-0 top-0 w-6 h-6 rounded-full flex items-center justify-center text-xs z-10 ${isActive ? 'bg-[#1e2d4a] text-white shadow-sm' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}>
-            {icon}
+            <UiIcon name={icon} size={14} />
         </div>
         {/* 标题 */}
         <div className="flex items-center gap-2 mb-2">

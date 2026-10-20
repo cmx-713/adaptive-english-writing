@@ -1,5 +1,61 @@
 /* Global styles for CET Writing Coach */
 
+:root {
+  color-scheme: light;
+  --ui-text: #1e293b;
+  --ui-muted: #64748b;
+  --ui-border: #dbe2ea;
+  --ui-surface: #ffffff;
+  --ui-primary: #1e40af;
+  --ui-focus: #2563eb;
+}
+
+body {
+  font-family: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  color: var(--ui-text);
+}
+
+/* Keep the learning workspace calm and consistent across modules. */
+.rounded-2xl,
+.rounded-3xl {
+  border-radius: 8px !important;
+}
+
+.shadow-xl,
+.shadow-2xl {
+  box-shadow: 0 2px 8px rgb(15 23 42 / 0.08) !important;
+}
+
+button,
+a,
+input,
+textarea,
+select,
+summary {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* Print helpers */
 @media print {
   .no-print {

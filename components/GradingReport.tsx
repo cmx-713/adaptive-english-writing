@@ -2,6 +2,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { EssayGradeResult, SentenceCritique, CritiqueCategory, KeyMaterial, ContrastivePoint, WritingMode } from '../types';
 import { evaluateRetrainingAttempt } from '../services/geminiService';
+import UiIcon from './UiIcon';
 
 interface GradingReportProps {
   result: EssayGradeResult;
@@ -17,9 +18,9 @@ interface GradingReportProps {
 // --- Helper Functions & Sub-components ---
 
 const REFLECTION_PROMPTS = [
-  "💡 停一下！在看诊断前，你能自己修好这个句子吗？",
-  "🧠 挑战：尝试找出这个表达背后的语法陷阱...",
-  "🔍 提示：点击前请先在心中构建你的‘升格版’。"
+  "停一下！在看诊断前，你能自己修好这个句子吗？",
+  "试着找出这个表达背后的语法问题。",
+  "点击前，请先在心中构建你的修改版本。"
 ];
 
 // Mini Radar for Contrast Tab
@@ -735,7 +736,7 @@ const GradingReport: React.FC<GradingReportProps> = ({
               <div className="bg-indigo-50/50 p-6 border-t border-indigo-50 flex gap-4">
                 <div className="text-4xl bg-white rounded-full w-12 h-12 flex items-center justify-center shadow-sm">👨‍🏫</div>
                 <div>
-                  <h4 className="font-bold text-indigo-900 text-sm mb-1 uppercase tracking-wider">Professor's Comment</h4>
+                      <h4 className="font-bold text-indigo-900 text-sm mb-1">导师总评</h4>
                   <p className="text-indigo-900/80 text-base leading-relaxed font-medium">"{result.generalComment}"</p>
                 </div>
               </div>
@@ -753,7 +754,7 @@ const GradingReport: React.FC<GradingReportProps> = ({
                 return (
                   <div key={severity} className={`bg-white rounded-xl border border-${config.color}-100 shadow-sm p-5 border-t-4 border-t-${config.color}-500`}>
                     <h4 className={`text-${config.color}-700 font-bold text-sm uppercase mb-3 flex items-center gap-2`}>
-                      <span className={`bg-${config.color}-100 p-1 rounded text-lg`}>{config.icon}</span> {config.label}
+                      {config.label}
                     </h4>
                     {issues.length > 0 ? (
                       <ul className="space-y-2">
@@ -763,7 +764,7 @@ const GradingReport: React.FC<GradingReportProps> = ({
                           </li>
                         ))}
                       </ul>
-                    ) : <span className="text-xs text-slate-400 italic">None detected.</span>}
+                    ) : <span className="text-xs text-slate-400">未发现明显问题</span>}
                   </div>
                 );
               })}
@@ -775,19 +776,19 @@ const GradingReport: React.FC<GradingReportProps> = ({
         {activeTab === 'critiques' && (
           <div className="space-y-8 animate-fade-in-up">
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 flex items-start gap-4 shadow-md">
-              <span className="text-3xl">💡</span>
+              <UiIcon name="idea" size={24} className="text-blue-700 shrink-0" />
               <div>
-                <h4 className="font-bold text-blue-800 mb-1">Interactive Learning Mode</h4>
+                <h4 className="font-bold text-blue-800 mb-1">先思考，再查看建议</h4>
                 <p className="text-sm text-blue-800/80 leading-relaxed">
-                  为了加深记忆，修改建议默认已隐藏。请先阅读 <b>Stage 1 (语境)</b>，思考如何修改，再点击卡片展开 <b>Stage 2 (诊断)</b> 和 <b>Stage 3 (升格)</b>。
+                  修改建议默认收起。请先阅读语境并尝试自行修改，再展开诊断与参考表达。
                 </p>
               </div>
             </div>
             <div className="space-y-4">
-              <CritiqueAccordion title="🗣️ 语言纯熟度 (Proficiency)" items={getCritiquesByCategory('Proficiency')} colorClass="text-blue-600" fullEssay={essayText} />
-              <CritiqueAccordion title="📖 表达清晰度 (Clarity)" items={getCritiquesByCategory('Clarity')} colorClass="text-rose-600" fullEssay={essayText} />
-              <CritiqueAccordion title={isNarrative ? '🧩 事件发展与连贯 (Story Flow)' : '🧩 组织与逻辑 (Organization)'} items={getCritiquesByCategory('Organization')} colorClass="text-amber-600" fullEssay={essayText} />
-              <CritiqueAccordion title={isNarrative ? '📝 故事内容与细节 (Story Content)' : '📝 内容与思辨 (Content)'} items={getCritiquesByCategory('Content')} colorClass="text-purple-600" fullEssay={essayText} />
+              <CritiqueAccordion title="语言准确度" items={getCritiquesByCategory('Proficiency')} colorClass="text-blue-600" fullEssay={essayText} />
+              <CritiqueAccordion title="表达清晰度" items={getCritiquesByCategory('Clarity')} colorClass="text-rose-600" fullEssay={essayText} />
+              <CritiqueAccordion title={isNarrative ? '事件发展与连贯' : '组织与逻辑'} items={getCritiquesByCategory('Organization')} colorClass="text-amber-600" fullEssay={essayText} />
+              <CritiqueAccordion title={isNarrative ? '故事内容与细节' : '内容与思辨'} items={getCritiquesByCategory('Content')} colorClass="text-purple-600" fullEssay={essayText} />
             </div>
           </div>
         )}
@@ -810,7 +811,7 @@ const GradingReport: React.FC<GradingReportProps> = ({
               <div className="overflow-y-auto custom-scrollbar p-4 space-y-4">
                 {result.contrastiveLearning.length === 0 && (
                   <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
-                    <div className="w-14 h-14 rounded-2xl bg-amber-50 flex items-center justify-center text-3xl mb-4">📭</div>
+                    <div className="w-14 h-14 rounded-lg bg-amber-50 flex items-center justify-center mb-4"><UiIcon name="folder" size={24} className="text-amber-700" /></div>
                     <p className="text-sm font-bold text-slate-700 mb-2">本次批改未生成对比要点</p>
                     <p className="text-xs text-slate-500 leading-relaxed mb-4">
                       AI 偶尔会因网络或模型波动遗漏对比要点。<br />
@@ -846,7 +847,6 @@ const GradingReport: React.FC<GradingReportProps> = ({
                       {/* Header */}
                       <div className={`px-4 py-2 border-b border-slate-100 flex justify-between items-center ${isActive ? 'bg-indigo-50/50' : 'bg-slate-50/50'}`}>
                         <div className="flex items-center gap-2">
-                          <span className="text-lg">{config.icon}</span>
                           <span className={`text-xs font-bold uppercase tracking-wider ${config.color}`}>{config.label}</span>
                         </div>
                         <span className="w-6 h-6 rounded-full bg-white text-slate-400 border border-slate-100 flex items-center justify-center text-xs font-bold shadow-sm">
@@ -879,7 +879,7 @@ const GradingReport: React.FC<GradingReportProps> = ({
                         {/* Strategy Analysis (3-Part) */}
                         <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 text-xs">
                           <div className="flex items-center gap-1 mb-1">
-                            <span className="text-indigo-500">💡</span>
+                            <UiIcon name="idea" size={15} className="text-indigo-500" />
                             <span className="font-bold text-slate-600 uppercase">专家复盘</span>
                           </div>
                           <p className="text-slate-600 leading-relaxed whitespace-pre-wrap">
@@ -898,7 +898,7 @@ const GradingReport: React.FC<GradingReportProps> = ({
               <div className="p-4 bg-white border-b border-slate-100 shadow-sm z-10 flex justify-between items-center sticky top-0 bg-opacity-95 backdrop-blur">
                 <div className="flex items-center gap-4">
                   <h3 className="font-serif font-bold text-lg text-slate-800 flex items-center gap-2">
-                    <span>🌟</span> {isNarrative ? '叙事参考范文' : '满分范文 (Band 14-15)'}
+                    {isNarrative ? '叙事参考范文' : '高分范文'}
                   </h3>
                   {/* NEW: Mini Radar Chart Comparison */}
                   <MiniRadar studentScores={result.subScores} modelScores={result.modelSubScores} />
@@ -925,7 +925,7 @@ const GradingReport: React.FC<GradingReportProps> = ({
           <div className="space-y-12 animate-fade-in-up">
             <div>
               <h3 className="font-serif font-bold text-lg text-slate-800 mb-6 flex items-center gap-2">
-                <span>✍️</span> {isNarrative ? '学练一体：叙事表达迁移' : '学练一体：高阶技法克隆 (Skill Cloning)'}
+                {isNarrative ? '叙事表达迁移练习' : '写作策略迁移练习'}
               </h3>
 
               {result.retraining.exercises.length > 0 ? (
@@ -958,12 +958,12 @@ const GradingReport: React.FC<GradingReportProps> = ({
                           onClick={() => setHintVisible(!hintVisible)}
                           className="flex items-center gap-2 text-xs font-bold text-amber-500 hover:text-amber-600 transition-colors"
                         >
-                          <span className={`text-xl ${!hintVisible ? 'animate-pulse' : ''}`}>💡</span>
-                          {hintVisible ? 'Hide Expert Tip' : 'Need a Tip?'}
+                          <UiIcon name="idea" className={!hintVisible ? 'animate-pulse' : ''} />
+                          {hintVisible ? '收起提示' : '查看提示'}
                         </button>
                         {hintVisible && (
                           <div className="absolute top-8 right-0 bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-lg text-xs shadow-lg w-64 z-20 animate-fade-in-up">
-                            <strong>Expert Tip:</strong> {result.retraining.exercises[activeExercise].hint}
+                            <strong>提示：</strong> {result.retraining.exercises[activeExercise].hint}
                           </div>
                         )}
                       </div>
@@ -1023,7 +1023,7 @@ const GradingReport: React.FC<GradingReportProps> = ({
                                 <span>AI 正在阅卷 (Evaluating)...</span>
                               </>
                             ) : (
-                              <><span>✨</span> 提交并对比 (Submit & Compare)</>
+                              <>提交并对比</>
                             )}
                           </button>
                         </div>
@@ -1041,7 +1041,7 @@ const GradingReport: React.FC<GradingReportProps> = ({
               ${evalResult.status === 'pass' ? 'bg-emerald-100 border-emerald-200 text-emerald-600' :
                                     evalResult.status === 'partial' ? 'bg-amber-100 border-amber-200 text-amber-600' :
                                       'bg-rose-100 border-rose-200 text-rose-600'}`}>
-                                  {evalResult.status === 'pass' ? '🎉' : evalResult.status === 'partial' ? '🤔' : '💪'}
+                                  <UiIcon name={evalResult.status === 'pass' ? 'success' : evalResult.status === 'partial' ? 'help' : 'activity'} size={22} />
                                 </div>
                               </div>
 
@@ -1050,9 +1050,9 @@ const GradingReport: React.FC<GradingReportProps> = ({
               ${evalResult.status === 'pass' ? 'text-emerald-800' :
                                     evalResult.status === 'partial' ? 'text-amber-800' :
                                       'text-rose-800'}`}>
-                                  {evalResult.status === 'pass' ? 'Perfect Execution! 策略应用完美' :
-                                    evalResult.status === 'partial' ? 'Almost There! 策略应用尚有瑕疵' :
-                                      'Needs Improvement 尚未掌握该策略'}
+                                  {evalResult.status === 'pass' ? '策略应用准确' :
+                                    evalResult.status === 'partial' ? '策略应用基本准确' :
+                                      '还需要继续练习'}
                                 </h4>
                                 <p className={`text-sm leading-relaxed
               ${evalResult.status === 'pass' ? 'text-emerald-700' :
@@ -1093,7 +1093,7 @@ const GradingReport: React.FC<GradingReportProps> = ({
                       disabled={activeExercise === 0}
                       className={`text-sm font-bold px-4 py-2 rounded-lg transition-colors ${activeExercise === 0 ? 'text-slate-300 cursor-not-allowed' : 'text-slate-600 hover:bg-slate-200'}`}
                     >
-                      ← Previous
+                      ← 上一题
                     </button>
 
                     {/* Only show Next if Result is visible or if user wants to skip (maybe handle skip differently, but standard nav for now) */}
@@ -1107,13 +1107,13 @@ const GradingReport: React.FC<GradingReportProps> = ({
                             ? 'bg-blue-900 text-white hover:bg-blue-950'
                             : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'}`}
                     >
-                      Next Challenge →
+                      下一题 →
                     </button>
                   </div>
                 </div>
               ) : (
                 <div className="text-center py-12 text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                  No exercises generated.
+                  暂无练习内容
                 </div>
               )}
             </div>
@@ -1122,17 +1122,17 @@ const GradingReport: React.FC<GradingReportProps> = ({
             <div>
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-serif font-bold text-lg text-slate-800 flex items-center gap-2">
-                  <span>🔑</span> 必背语料 (Key Expressions)
+                  必备表达
                 </h3>
                 <div className="flex gap-2">
-                  <button onClick={() => handleCopyMaterials(result.retraining.materials)} className="text-xs bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded text-slate-600 font-bold transition-colors">{copyStatus === 'copied' ? 'Copied!' : 'Copy All'}</button>
-                  <button onClick={() => handleExportCSV(result.retraining.materials)} className="text-xs bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded text-blue-900 font-bold transition-colors">Export CSV</button>
+                  <button onClick={() => handleCopyMaterials(result.retraining.materials)} className="text-xs bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded text-slate-600 font-bold transition-colors">{copyStatus === 'copied' ? '已复制' : '复制全部'}</button>
+                  <button onClick={() => handleExportCSV(result.retraining.materials)} className="text-xs bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded text-blue-900 font-bold transition-colors">导出表格</button>
                 </div>
               </div>
               <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
                 <table className="w-full text-sm text-left">
                   <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs">
-                    <tr><th className="px-6 py-3">Expression</th><th className="px-6 py-3">Meaning</th><th className="px-6 py-3">Example</th></tr>
+                    <tr><th className="px-6 py-3">表达</th><th className="px-6 py-3">含义</th><th className="px-6 py-3">例句</th></tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {result.retraining.materials.map((m, i) => (

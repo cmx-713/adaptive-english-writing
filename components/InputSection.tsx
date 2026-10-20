@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { UserInput, WritingMode } from '../types';
+import UiIcon from './UiIcon';
 
 interface InputSectionProps {
   onSubmit: (data: UserInput) => void;
@@ -36,13 +37,10 @@ const InputSection: React.FC<InputSectionProps> = ({ onSubmit, isLoading }) => {
   };
 
   return (
-    <div className="bg-white rounded-2xl shadow-xl p-6 md:p-8 mb-8 border border-slate-100 relative overflow-hidden">
-      {/* Decorative background element */}
-      <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-blue-50 rounded-full blur-2xl opacity-50"></div>
-
+    <div className="bg-white rounded-lg shadow-sm p-6 md:p-8 mb-8 border border-slate-200">
       <div className="mb-6 text-center">
-        <h2 className="text-2xl font-serif font-bold text-slate-800 mb-2">Topic Analysis</h2>
-        <p className="text-slate-500 text-sm">输入题目，AI 将为你随机抽取 3 个挑战性视角，锻炼强制联想能力。</p>
+        <h2 className="text-2xl font-bold text-slate-800 mb-2">输入写作题目</h2>
+        <p className="text-slate-500 text-sm">选择文体并输入题目，开始构思。</p>
       </div>
       
       <form onSubmit={handleSubmit} className="max-w-xl mx-auto space-y-5">
@@ -82,7 +80,7 @@ const InputSection: React.FC<InputSectionProps> = ({ onSubmit, isLoading }) => {
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
             placeholder="例如：The Impact of Social Media"
-            className="w-full pl-6 pr-12 py-4 rounded-xl border border-slate-200 shadow-sm focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all outline-none text-lg text-slate-800 placeholder-slate-400"
+            className="w-full pl-4 pr-12 py-3 rounded-md border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-colors outline-none text-base text-slate-800 placeholder-slate-400"
             disabled={isLoading}
             required
             autoComplete="off"
@@ -91,9 +89,10 @@ const InputSection: React.FC<InputSectionProps> = ({ onSubmit, isLoading }) => {
              <button 
                type="button"
                onClick={() => setTopic('')}
-               className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
+               className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+               aria-label="清空题目"
              >
-               ✕
+               <UiIcon name="close" size={16} />
              </button>
           )}
         </div>
@@ -103,30 +102,23 @@ const InputSection: React.FC<InputSectionProps> = ({ onSubmit, isLoading }) => {
             type="button"
             onClick={handleRandomTopic}
             disabled={isLoading}
-            className="px-6 py-3 rounded-xl font-medium text-blue-900 bg-blue-50 border border-blue-100 hover:bg-blue-100 transition-all flex items-center justify-center gap-2"
+            className="px-5 py-3 rounded-md font-medium text-blue-900 bg-white border border-slate-300 hover:bg-slate-50 transition-colors flex items-center justify-center gap-2"
           >
-            <span>📚</span> 试一试真题
+            <UiIcon name="book" size={18} /> 试一试真题
           </button>
 
           <button
             type="submit"
             disabled={isLoading || !topic}
-            className={`px-8 py-3 rounded-xl font-bold text-white shadow-md transition-colors flex items-center justify-center gap-2 group min-w-[160px]
+            className={`px-6 py-3 rounded-md font-bold text-white shadow-sm transition-colors flex items-center justify-center gap-2 min-w-[160px]
               ${isLoading 
                 ? 'bg-slate-400 cursor-not-allowed' 
                 : 'bg-blue-900 hover:bg-blue-950'
               }`}
           >
-            <span className="text-xl transition-transform duration-500 group-hover:rotate-180">🎲</span>
-            {isLoading ? 'Thinking...' : '开始联想'}
+            {isLoading ? <><span className="animate-spin"><UiIcon name="refresh" size={17} /></span>正在生成</> : <><UiIcon name="brain" size={18} />开始构思</>}
           </button>
         </div>
-        
-        <p className="text-center text-xs text-slate-400 max-w-md mx-auto leading-relaxed pt-2">
-          <span className="inline-block bg-slate-50 px-2 py-1 rounded border border-slate-100">
-            💡 Tip: 不知道写什么？点击“试一试真题”获取灵感。
-          </span>
-        </p>
       </form>
     </div>
   );
