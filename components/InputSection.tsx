@@ -5,6 +5,8 @@ import UiIcon from './UiIcon';
 interface InputSectionProps {
   onSubmit: (data: UserInput) => void;
   isLoading: boolean;
+  writingMode: WritingMode;
+  onWritingModeChange: (mode: WritingMode) => void;
 }
 
 const PAST_EXAM_TOPICS = [
@@ -20,9 +22,8 @@ const PAST_EXAM_TOPICS = [
   "Balancing Academic Study and Extracurricular Activities"
 ];
 
-const InputSection: React.FC<InputSectionProps> = ({ onSubmit, isLoading }) => {
+const InputSection: React.FC<InputSectionProps> = ({ onSubmit, isLoading, writingMode, onWritingModeChange }) => {
   const [topic, setTopic] = useState('');
-  const [writingMode, setWritingMode] = useState<WritingMode>('argumentative');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,7 +64,7 @@ const InputSection: React.FC<InputSectionProps> = ({ onSubmit, isLoading }) => {
                   name="writingMode"
                   value={option.value}
                   checked={writingMode === option.value}
-                  onChange={() => setWritingMode(option.value)}
+                  onChange={() => onWritingModeChange(option.value)}
                   disabled={isLoading}
                   className="sr-only"
                 />

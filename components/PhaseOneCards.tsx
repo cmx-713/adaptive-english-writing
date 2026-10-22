@@ -120,12 +120,23 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
     setValidationLoading(prev => ({ ...prev, [card.id]: true }));
     setCoachingErrors(prev => ({ ...prev, [card.id]: '' }));
     try {
-      const result = isNarrative
+      let result = isNarrative
         ? await validateNarrativeIdea(topic, card.dimension, input, card.narrativeRole)
         : await validateIdea(topic, card.dimension, input);
+      if (isNarrative && result.isComplete) {
+        const revision = await synthesizeNarrativeRevision(
+          topic,
+          card.dimension,
+          input,
+          result.conversation || [],
+          result.progressSummary,
+          result.remainingGap,
+        );
+        result = { ...result, revisedIdea: revision.revisedIdea };
+      }
       setValidationResult(prev => ({ ...prev, [card.id]: result }));
       setCoachingAnswers(prev => ({ ...prev, [card.id]: '' }));
-      setRevisedIdeas(prev => ({ ...prev, [card.id]: '' }));
+      setRevisedIdeas(prev => ({ ...prev, [card.id]: result.revisedIdea || '' }));
       // Auto-expand validation when it first arrives
       setFeedbackExpanded(prev => ({ ...prev, [card.id]: true }));
       persistCoachingResult(card.id, result);
@@ -161,7 +172,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
         : await continueIdeaCoaching(topic, card.dimension, current.initialIdea || inputs[card.id] || '', answeredConversation);
       const completedConversation: IdeaCoachingTurn[] = answeredConversation.map((turn, index) =>
         index === answeredConversation.length - 1
-          ? { ...turn, coachFeedback: coachReply.analysis }
+          ? { ...turn, coachFeedback: coachReply.analysis, gapDiagnosis: coachReply.gapDiagnosis, coverageState: coachReply.coverageState }
           : turn
       );
       const needsNextRound = !!coachReply.nextQuestion && completedConversation.length < 2;
@@ -173,6 +184,12 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
         status: coachReply.status,
         progressSummary: coachReply.progressSummary,
         remainingGap: coachReply.remainingGap,
+        gapDiagnosis: coachReply.gapDiagnosis,
+        gapHistory: [
+          ...(current.gapHistory || (current.gapDiagnosis ? [current.gapDiagnosis] : [])),
+          coachReply.gapDiagnosis,
+        ],
+        coverageState: coachReply.coverageState,
         conversation: completedConversation,
         isComplete: !needsNextRound,
       };
@@ -295,6 +312,36 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
               <span className="font-bold text-xs uppercase tracking-wider block mb-1 opacity-60">思考诊断 · {result.focusArea || (isNarrative ? '故事构思' : '观点分析')}</span>
               {renderRichText(result.analysis)}
             </p>
+            {result.gapDiagnosis && (
+              <div className="mt-3 rounded-lg border border-slate-200 bg-white/70 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-slate-700">当前需要补强</span>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                    result.gapDiagnosis.status === 'resolved'
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : result.gapDiagnosis.status === 'improving'
+                        ? 'bg-amber-100 text-amber-700'
+                        : 'bg-rose-100 text-rose-700'
+                  }`}>
+                    {result.gapDiagnosis.status === 'resolved' ? '已补足' : result.gapDiagnosis.status === 'improving' ? '正在补足' : '尚未补足'}
+                  </span>
+                </div>
+                <p className="text-sm font-bold text-slate-800">{result.gapDiagnosis.label}</p>
+                {result.gapDiagnosis.evidence && (
+                  <p className="mt-2 text-xs leading-relaxed text-slate-600">
+                    <span className="font-bold">依据：</span>{result.gapDiagnosis.evidence}
+                  </p>
+                )}
+                <p className="mt-2 text-xs leading-relaxed text-slate-600">
+                  <span className="font-bold">为什么需要补强：</span>{result.gapDiagnosis.whyItMatters}
+                </p>
+                {result.coverageState && (
+                  <p className="mt-2 border-t border-slate-200 pt-2 text-[11px] leading-relaxed text-slate-500">
+                    已捕捉 {result.coverageState.coveredSlots.length} 项，仍有 {result.coverageState.missingSlots.length + result.coverageState.partialSlots.length} 项待补强。
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -392,7 +439,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className={`grid grid-cols-1 md:grid-cols-3 gap-6 ${isNarrative ? 'items-start' : ''}`}>
         {cards.map((card) => {
           const isRevealed = !!validationResult[card.id];
           const inputVal = inputs[card.id] || '';
@@ -548,13 +595,20 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                         ))}
                       </div>
 
-                      {roundComplete && (result?.progressSummary || result?.remainingGap) && (
+                      {roundComplete && (result?.progressSummary || result?.remainingGap || result?.gapDiagnosis) && (
                         <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50/70 p-3 space-y-2">
                           {result.progressSummary && (
                           <p className="text-xs text-emerald-900 leading-relaxed"><span className="font-bold">{isNarrative ? '构思进展：' : '思考进展：'}</span>{result.progressSummary}</p>
                           )}
                           {result.remainingGap && (
                             <p className="text-xs text-amber-900 leading-relaxed"><span className="font-bold">{isNarrative ? '故事写作时可继续补充：' : '写作时仍需留意：'}</span>{result.remainingGap}</p>
+                          )}
+                          {result.gapDiagnosis && (
+                            <p className="text-xs text-slate-700 leading-relaxed">
+                              <span className="font-bold">缺口状态：</span>
+                              {result.gapDiagnosis.status === 'resolved' ? '已补足' : result.gapDiagnosis.status === 'improving' ? '正在补足' : '尚未补足'}
+                              {' · '}{result.gapDiagnosis.label}
+                            </p>
                           )}
                         </div>
                       )}

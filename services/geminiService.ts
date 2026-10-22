@@ -14,6 +14,16 @@ import {
   WritingMode,
   NarrativeCardRole
 } from "../types";
+import {
+  decideNarrativeCoverage,
+  narrativeCoverageSlots,
+  narrativeEvidenceQuestion,
+  narrativeEvidenceSlot,
+  narrativeQuestionMatchesTarget,
+  NarrativeEvidenceAssessment,
+  NarrativeEvidenceClaim,
+  NarrativeEvidenceKey,
+} from './narrativeCoachingRules';
 
 // Define the IdeaValidationResult type locally and export it as it is used by components
 export interface IdeaValidationResult {
@@ -28,8 +38,60 @@ export interface IdeaValidationResult {
   isComplete?: boolean;
   progressSummary?: string;
   remainingGap?: string;
+  gapDiagnosis?: GapDiagnosis;
+  gapHistory?: GapDiagnosis[];
+  coverageState?: CoverageState;
   thinkingExpansion?: string[]; // Legacy records may contain this field.
   writingMode?: WritingMode;
+}
+
+export type GapType =
+  | 'evidence'
+  | 'causal_link'
+  | 'assumption'
+  | 'alternative_view'
+  | 'scope'
+  | 'scene_detail'
+  | 'action'
+  | 'response'
+  | 'outcome'
+  | 'reflection';
+
+export type CoverageSlot =
+  | 'claim'
+  | 'evidence'
+  | 'causal_link'
+  | 'assumption'
+  | 'alternative_view'
+  | 'scope'
+  | 'setting'
+  | 'anchor_object'
+  | 'visual_detail'
+  | 'sensory_detail'
+  | 'body_response'
+  | 'judgment'
+  | 'immediate_action'
+  | 'consequence'
+  | 'reflection';
+
+export interface CoverageState {
+  coveredSlots: CoverageSlot[];
+  partialSlots: CoverageSlot[];
+  missingSlots: CoverageSlot[];
+  askedSlots: CoverageSlot[];
+  currentTargetSlot?: CoverageSlot;
+  duplicateRisk: 'low' | 'medium' | 'high';
+  completionReady: boolean;
+}
+
+export interface GapDiagnosis {
+  type: GapType;
+  slot?: CoverageSlot;
+  label: string;
+  status: 'open' | 'improving' | 'resolved';
+  evidence: string;
+  whyItMatters: string;
+  narrativeEvidenceKey?: NarrativeEvidenceKey;
 }
 
 export interface IdeaCoachingTurn {
@@ -37,7 +99,378 @@ export interface IdeaCoachingTurn {
   hint?: string;
   studentResponse?: string;
   coachFeedback?: string;
+  gapDiagnosis?: GapDiagnosis;
+  coverageState?: CoverageState;
 }
+
+const gapDiagnosisSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    type: {
+      type: Type.STRING,
+      enum: ['evidence', 'causal_link', 'assumption', 'alternative_view', 'scope', 'scene_detail', 'action', 'response', 'outcome', 'reflection']
+    },
+    slot: {
+      type: Type.STRING,
+      enum: ['claim', 'evidence', 'causal_link', 'assumption', 'alternative_view', 'scope', 'setting', 'anchor_object', 'visual_detail', 'sensory_detail', 'body_response', 'judgment', 'immediate_action', 'consequence', 'reflection']
+    },
+    label: { type: Type.STRING },
+    status: { type: Type.STRING, enum: ['open', 'improving', 'resolved'] },
+    evidence: { type: Type.STRING },
+    whyItMatters: { type: Type.STRING },
+  },
+  required: ['type', 'label', 'status', 'evidence', 'whyItMatters'],
+};
+
+const coverageStateSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    coveredSlots: { type: Type.ARRAY, items: { type: Type.STRING, enum: ['claim', 'evidence', 'causal_link', 'assumption', 'alternative_view', 'scope', 'setting', 'anchor_object', 'visual_detail', 'sensory_detail', 'body_response', 'judgment', 'immediate_action', 'consequence', 'reflection'] } },
+    partialSlots: { type: Type.ARRAY, items: { type: Type.STRING, enum: ['claim', 'evidence', 'causal_link', 'assumption', 'alternative_view', 'scope', 'setting', 'anchor_object', 'visual_detail', 'sensory_detail', 'body_response', 'judgment', 'immediate_action', 'consequence', 'reflection'] } },
+    missingSlots: { type: Type.ARRAY, items: { type: Type.STRING, enum: ['claim', 'evidence', 'causal_link', 'assumption', 'alternative_view', 'scope', 'setting', 'anchor_object', 'visual_detail', 'sensory_detail', 'body_response', 'judgment', 'immediate_action', 'consequence', 'reflection'] } },
+    askedSlots: { type: Type.ARRAY, items: { type: Type.STRING, enum: ['claim', 'evidence', 'causal_link', 'assumption', 'alternative_view', 'scope', 'setting', 'anchor_object', 'visual_detail', 'sensory_detail', 'body_response', 'judgment', 'immediate_action', 'consequence', 'reflection'] } },
+    currentTargetSlot: { type: Type.STRING, enum: ['claim', 'evidence', 'causal_link', 'assumption', 'alternative_view', 'scope', 'setting', 'anchor_object', 'visual_detail', 'sensory_detail', 'body_response', 'judgment', 'immediate_action', 'consequence', 'reflection'] },
+    duplicateRisk: { type: Type.STRING, enum: ['low', 'medium', 'high'] },
+    completionReady: { type: Type.BOOLEAN },
+  },
+  required: ['coveredSlots', 'partialSlots', 'missingSlots', 'askedSlots', 'duplicateRisk', 'completionReady'],
+};
+
+const narrativeEvidenceClaimSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    status: { type: Type.STRING, enum: ['covered', 'partial', 'missing', 'not_applicable', 'uncertain'] },
+    quote: { type: Type.STRING },
+  },
+  required: ['status', 'quote'],
+};
+
+const narrativeEvidenceSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    eventAnchor: narrativeEvidenceClaimSchema,
+    concreteDetail: narrativeEvidenceClaimSchema,
+    immediateResponse: narrativeEvidenceClaimSchema,
+    nextActionOrResponse: narrativeEvidenceClaimSchema,
+    immediateConsequence: narrativeEvidenceClaimSchema,
+    outcomeOrEnding: narrativeEvidenceClaimSchema,
+    laterReflection: narrativeEvidenceClaimSchema,
+  },
+  required: ['eventAnchor', 'concreteDetail', 'immediateResponse', 'nextActionOrResponse', 'immediateConsequence', 'outcomeOrEnding', 'laterReflection'],
+};
+
+const normalizeNarrativeEvidence = (raw: any): NarrativeEvidenceAssessment => {
+  const statuses: NarrativeEvidenceClaim['status'][] = ['covered', 'partial', 'missing', 'not_applicable', 'uncertain'];
+  const keys: NarrativeEvidenceKey[] = ['eventAnchor', 'concreteDetail', 'immediateResponse', 'nextActionOrResponse', 'immediateConsequence', 'outcomeOrEnding', 'laterReflection'];
+  return Object.fromEntries(keys.map(key => {
+    const claim = raw?.[key];
+    const status = statuses.includes(claim?.status) ? claim.status : 'uncertain';
+    return [key, { status, quote: typeof claim?.quote === 'string' ? claim.quote.trim() : '' }];
+  })) as NarrativeEvidenceAssessment;
+};
+
+const narrativeCoverageState = (
+  role: NarrativeCardRole,
+  decision: ReturnType<typeof decideNarrativeCoverage>,
+  priorTargets: NarrativeEvidenceKey[],
+): CoverageState => {
+  const slots = narrativeCoverageSlots(role, decision);
+  const target = decision.target ? narrativeEvidenceSlot(decision.target) as CoverageSlot : undefined;
+  const askedSlots = Array.from(new Set(priorTargets.map(key => narrativeEvidenceSlot(key) as CoverageSlot)));
+  return {
+    coveredSlots: slots.coveredSlots as CoverageSlot[],
+    partialSlots: slots.partialSlots as CoverageSlot[],
+    missingSlots: slots.missingSlots as CoverageSlot[],
+    askedSlots,
+    currentTargetSlot: target,
+    duplicateRisk: decision.targetWasAsked ? 'medium' : 'low',
+    completionReady: decision.completionReady,
+  };
+};
+
+const narrativeGapDiagnosis = (
+  decision: ReturnType<typeof decideNarrativeCoverage>,
+  assessment: NarrativeEvidenceAssessment,
+): GapDiagnosis => {
+  const target = decision.target;
+  if (!target) {
+    const evidence = decision.covered
+      .map(key => assessment[key]?.quote)
+      .filter((quote): quote is string => !!quote)
+      .slice(0, 2)
+      .join('；');
+    return {
+      type: 'scene_detail',
+      label: '本维度的关键信息已足够清楚',
+      status: 'resolved',
+      evidence,
+      whyItMatters: '现有内容已足以支持这一部分的后续写作；其他细节可由你按需要继续展开。',
+    };
+  }
+
+  const diagnosis: Record<NarrativeEvidenceKey, Pick<GapDiagnosis, 'type' | 'slot' | 'label' | 'whyItMatters'>> = {
+    eventAnchor: { type: 'scene_detail', slot: 'setting', label: '关键事件还不够明确', whyItMatters: '读者需要知道这个关键时刻具体发生了什么，才能跟上故事。' },
+    concreteDetail: { type: 'scene_detail', slot: 'visual_detail', label: '需要一个具体细节呈现关键时刻', whyItMatters: '一个来自原经历的具体细节能帮助读者理解或想象这一刻。' },
+    immediateResponse: { type: 'response', slot: 'body_response', label: '当下反应还不够清楚', whyItMatters: '如果人物当时的反应影响了故事走向，补清它能让转折更容易理解。' },
+    nextActionOrResponse: { type: 'action', slot: 'immediate_action', label: '关键时刻之后的行动还不够明确', whyItMatters: '读者需要知道事情发生后你采取了什么行动，才能看清事件如何继续。' },
+    immediateConsequence: { type: 'outcome', slot: 'consequence', label: '行动后的即时变化还不够清楚', whyItMatters: '说明行动带来的直接变化，有助于连接前后事件。' },
+    outcomeOrEnding: { type: 'outcome', slot: 'consequence', label: '这段经历的结果还不够明确', whyItMatters: '具体结果能让读者理解这段经历如何结束或发生了什么变化。' },
+    laterReflection: { type: 'reflection', slot: 'reflection', label: '事后的理解还可以继续展开', whyItMatters: '如果这段经历带来了新的认识，写清它能说明经历对你的意义。' },
+  };
+  return {
+    ...diagnosis[target],
+    narrativeEvidenceKey: target,
+    status: 'open',
+    evidence: decision.evidenceQuote,
+  };
+};
+
+const narrativeTargetFromPriorTurn = (role: NarrativeCardRole, diagnosis?: GapDiagnosis): NarrativeEvidenceKey | undefined => {
+  if (!diagnosis) return undefined;
+  if (diagnosis.narrativeEvidenceKey) return diagnosis.narrativeEvidenceKey;
+  if (role === 'scene') {
+    if (diagnosis.slot === 'setting') return 'eventAnchor';
+    if (diagnosis.slot === 'visual_detail' || diagnosis.slot === 'sensory_detail' || diagnosis.slot === 'anchor_object') return 'concreteDetail';
+    if (diagnosis.slot === 'body_response' || diagnosis.slot === 'judgment') return 'immediateResponse';
+  }
+  if (role === 'response') {
+    if (diagnosis.slot === 'immediate_action') return 'nextActionOrResponse';
+    if (diagnosis.slot === 'consequence') return 'immediateConsequence';
+  }
+  if (role === 'outcome') {
+    if (diagnosis.slot === 'consequence') return 'outcomeOrEnding';
+    if (diagnosis.slot === 'reflection') return 'laterReflection';
+  }
+  return undefined;
+};
+
+const normalizeGapDiagnosis = (raw: any, isNarrative: boolean): GapDiagnosis => {
+  const narrativeFallback: GapDiagnosis = {
+    type: 'scene_detail',
+    label: '缺少可观察的故事细节',
+    status: 'open',
+    evidence: '',
+    whyItMatters: '补充具体画面后，读者才能更清楚地进入这段经历。',
+  };
+  const argumentativeFallback: GapDiagnosis = {
+    type: 'evidence',
+    label: '缺少具体依据',
+    status: 'open',
+    evidence: '',
+    whyItMatters: '补充依据后，读者才能判断这个观点为什么成立。',
+  };
+  const fallback = isNarrative ? narrativeFallback : argumentativeFallback;
+  const validTypes: GapType[] = ['evidence', 'causal_link', 'assumption', 'alternative_view', 'scope', 'scene_detail', 'action', 'response', 'outcome', 'reflection'];
+  const type: GapType = validTypes.includes(raw?.type) ? raw.type as GapType : fallback.type;
+  const validSlots: CoverageSlot[] = ['claim', 'evidence', 'causal_link', 'assumption', 'alternative_view', 'scope', 'setting', 'anchor_object', 'visual_detail', 'sensory_detail', 'body_response', 'judgment', 'immediate_action', 'consequence', 'reflection'];
+  const slotByType: Record<GapType, CoverageSlot> = {
+    evidence: 'evidence', causal_link: 'causal_link', assumption: 'assumption', alternative_view: 'alternative_view', scope: 'scope',
+    scene_detail: 'visual_detail', action: 'immediate_action', response: 'body_response', outcome: 'consequence', reflection: 'reflection',
+  };
+  const slot: CoverageSlot = validSlots.includes(raw?.slot) ? raw.slot as CoverageSlot : slotByType[type];
+  const status = raw?.status === 'resolved' || raw?.status === 'improving' || raw?.status === 'open'
+    ? raw.status
+    : fallback.status;
+  return {
+    type,
+    slot,
+    label: typeof raw?.label === 'string' && raw.label.trim() ? raw.label.trim() : fallback.label,
+    status,
+    evidence: typeof raw?.evidence === 'string' ? raw.evidence.trim() : fallback.evidence,
+    whyItMatters: typeof raw?.whyItMatters === 'string' && raw.whyItMatters.trim()
+      ? raw.whyItMatters.trim()
+      : fallback.whyItMatters,
+  };
+};
+
+const validCoverageSlots: CoverageSlot[] = ['claim', 'evidence', 'causal_link', 'assumption', 'alternative_view', 'scope', 'setting', 'anchor_object', 'visual_detail', 'sensory_detail', 'body_response', 'judgment', 'immediate_action', 'consequence', 'reflection'];
+
+const narrativeSlotsByRole: Record<NarrativeCardRole, CoverageSlot[]> = {
+  scene: ['setting', 'anchor_object', 'visual_detail', 'sensory_detail', 'body_response', 'judgment'],
+  response: ['immediate_action', 'body_response', 'consequence'],
+  outcome: ['consequence', 'reflection'],
+};
+
+const argumentativeSlots: CoverageSlot[] = ['claim', 'evidence', 'causal_link', 'assumption', 'alternative_view', 'scope'];
+
+const normalizeCoverageState = (
+  raw: any,
+  isNarrative: boolean,
+  narrativeRole?: NarrativeCardRole,
+  fallbackTarget?: CoverageSlot,
+  priorAskedSlots: CoverageSlot[] = [],
+): CoverageState => {
+  const allowed = isNarrative ? (narrativeRole ? narrativeSlotsByRole[narrativeRole] : narrativeSlotsByRole.scene) : argumentativeSlots;
+  const readSlots = (value: unknown) => Array.isArray(value)
+    ? value.filter((slot): slot is CoverageSlot => validCoverageSlots.includes(slot) && allowed.includes(slot))
+    : [];
+  const coveredSlots = Array.from(new Set(readSlots(raw?.coveredSlots)));
+  const partialSlots = Array.from(new Set(readSlots(raw?.partialSlots).filter(slot => !coveredSlots.includes(slot))));
+  const missingSlots = Array.from(new Set(readSlots(raw?.missingSlots).filter(slot => !coveredSlots.includes(slot) && !partialSlots.includes(slot))));
+  const askedSlots = Array.from(new Set([...priorAskedSlots, ...readSlots(raw?.askedSlots)]));
+  const currentTargetSlot = validCoverageSlots.includes(raw?.currentTargetSlot) && allowed.includes(raw.currentTargetSlot)
+    ? raw.currentTargetSlot
+    : fallbackTarget && allowed.includes(fallbackTarget) ? fallbackTarget : undefined;
+  const duplicateRisk = raw?.duplicateRisk === 'high' || raw?.duplicateRisk === 'medium' ? raw.duplicateRisk : 'low';
+  return {
+    coveredSlots,
+    partialSlots,
+    missingSlots,
+    askedSlots,
+    currentTargetSlot,
+    duplicateRisk,
+    completionReady: raw?.completionReady === true,
+  };
+};
+
+const slotFallbackQuestion = (slot: CoverageSlot, isNarrative: boolean): string => {
+  if (!isNarrative) {
+    const questions: Partial<Record<CoverageSlot, string>> = {
+      evidence: '你能提供一个具体事实、案例或观察来支持这个判断吗？',
+      causal_link: '这个依据具体通过什么过程支持你的观点？',
+      assumption: '你的判断依赖哪一个前提？',
+      alternative_view: '在什么情况下，另一种解释可能成立？',
+      scope: '你的判断适用于哪些情况，又不适用于哪些情况？',
+    };
+    return questions[slot] || questions.evidence!;
+  }
+  const questions: Partial<Record<CoverageSlot, string>> = {
+    setting: '回想这个关键时刻，你当时身处什么具体地方？',
+    anchor_object: '在这个关键时刻，你首先注意到了什么具体对象？',
+    visual_detail: '那个对象在你眼前呈现出什么具体样子？',
+    sensory_detail: '那个瞬间有什么具体的声音、光线或触感让你注意到它？',
+    body_response: '看到这一幕后，你当时的脚步或视线有什么变化？',
+    judgment: '看到这个情况后，你当时作出了什么判断？',
+    immediate_action: '发现这件事后，你接下来做的第一件事是什么？',
+    consequence: '采取这个行动后，事情马上出现了什么具体变化？',
+    reflection: '后来这次经历让你形成了什么具体认识？',
+  };
+  return questions[slot] || questions.visual_detail!;
+};
+
+const chooseTargetSlot = (
+  isNarrative: boolean,
+  narrativeRole: NarrativeCardRole | undefined,
+  diagnosis: GapDiagnosis,
+  coverageState: CoverageState,
+  priorAskedSlots: CoverageSlot[],
+): CoverageSlot => {
+  const allowed = isNarrative ? (narrativeRole ? narrativeSlotsByRole[narrativeRole] : narrativeSlotsByRole.scene) : argumentativeSlots;
+  const candidate = diagnosis.slot && allowed.includes(diagnosis.slot) ? diagnosis.slot : undefined;
+  const asked = new Set(priorAskedSlots);
+  const addressed = new Set(coverageState.coveredSlots);
+  if (candidate && !asked.has(candidate) && !addressed.has(candidate)) return candidate;
+  const missing = coverageState.missingSlots.filter(slot => !asked.has(slot));
+  if (missing.length > 0) return missing[0];
+  const partial = coverageState.partialSlots.filter(slot => !asked.has(slot));
+  if (partial.length > 0) return partial[0];
+  const fallbackOrder: CoverageSlot[] = isNarrative
+    ? narrativeRole === 'response'
+      ? ['immediate_action', 'body_response', 'consequence']
+      : narrativeRole === 'outcome'
+        ? ['consequence', 'reflection']
+        : ['visual_detail', 'body_response', 'judgment', 'sensory_detail', 'anchor_object', 'setting']
+    : argumentativeSlots;
+  const firstUnasked = fallbackOrder.find(slot => allowed.includes(slot) && !asked.has(slot));
+  return firstUnasked || candidate || allowed[0];
+};
+
+const alignDiagnosisToTarget = (diagnosis: GapDiagnosis, targetSlot: CoverageSlot, isNarrative: boolean): GapDiagnosis => {
+  if (diagnosis.slot === targetSlot) return diagnosis;
+  const labels: Partial<Record<CoverageSlot, string>> = {
+    evidence: '需要补充具体依据', causal_link: '依据与观点之间的联系仍需说明', assumption: '需要检查观点依赖的前提', alternative_view: '需要考虑其他可能解释', scope: '需要明确观点适用的范围',
+    setting: '需要补充关键时刻所处的具体环境', anchor_object: '需要明确关键时刻中的具体对象', visual_detail: '需要补充对象的可观察特征', sensory_detail: '需要补充关键时刻的感官细节', body_response: '需要补充当时的身体反应', judgment: '需要补充当时作出的判断', immediate_action: '需要补充紧接着发生的行动', consequence: '需要补充行动或事件带来的结果', reflection: '需要补充事后的具体认识',
+  };
+  return {
+    ...diagnosis,
+    type: targetSlot === 'visual_detail' || targetSlot === 'sensory_detail' || targetSlot === 'setting' || targetSlot === 'anchor_object' || targetSlot === 'body_response' || targetSlot === 'judgment'
+      ? 'scene_detail'
+      : targetSlot === 'immediate_action' ? 'action'
+        : targetSlot === 'consequence' ? 'outcome'
+          : targetSlot === 'reflection' ? 'reflection'
+            : targetSlot === 'claim' || targetSlot === 'evidence' ? 'evidence'
+              : targetSlot,
+    slot: targetSlot,
+    label: labels[targetSlot] || (isNarrative ? '需要补充一个具体故事细节' : '需要补充一个论证要素'),
+    status: 'open',
+  };
+};
+
+const questionIsDuplicate = (question: string, previousQuestions: string[]): boolean => {
+  const normalize = (value: string) => value.toLowerCase().replace(/[?？。！!，,、：:；;“”"'\s]/g, '');
+  const normalized = normalize(question);
+  if (!normalized) return true;
+  return previousQuestions.some(previous => {
+    const other = normalize(previous);
+    if (normalized === other) return true;
+    const shorter = normalized.length <= other.length ? normalized : other;
+    const longer = normalized.length <= other.length ? other : normalized;
+    return shorter.length >= 8 && longer.includes(shorter);
+  });
+};
+
+const questionMatchesSlot = (question: string, slot: CoverageSlot): boolean => {
+  const patterns: Record<CoverageSlot, RegExp> = {
+    claim: /观点|主张|判断|claim|position|argument/i,
+    evidence: /依据|证据|事实|案例|数据|例子|支持|evidence|example|case|fact|data/i,
+    causal_link: /为什么|如何支持|过程|导致|联系|因果|机制|support|how.*lead|cause|link/i,
+    assumption: /前提|假设|依赖|assuming|assumption|premise/i,
+    alternative_view: /另一种|不同看法|反面|反方|其他解释|alternative|opposing|counter/i,
+    scope: /哪些情况|适用|条件|范围|不适用|scope|condition|apply|limit/i,
+    setting: /哪里|地点|地方|位置|环境|何时|什么时候|where|when|place|setting/i,
+    anchor_object: /什么对象|看见什么|注意到什么|物体|标志|路牌|object|notice|see|saw/i,
+    visual_detail: /什么样|样子|文字|符号|颜色|形状|大小|具体画面|画面|look|word|symbol|color|shape|size|visible/i,
+    sensory_detail: /声音|光线|气味|触感|听到|闻到|感觉到|sound|light|smell|touch|hear|felt/i,
+    body_response: /脚步|视线|眼睛|呼吸|手|停下|转身|环顾|身体|step|feet|eyes|breath|hand|stop|turn|looked/i,
+    judgment: /判断|想到|意识到|以为|认为|看法|决定|realize|think|thought|judg|decide/i,
+    immediate_action: /第一件事|接下来|做了什么|行动|采取|走向|打开|询问|跟着|action|next|do|did|follow|ask|open/i,
+    consequence: /结果|变化|后来|之后|导致|出现|结束|change|result|after|consequence|end/i,
+    reflection: /明白|认识|启发|影响|以后|成长|学到|理解|realize|learn|understand|change.*view|reflection/i,
+  };
+  return patterns[slot].test(question);
+};
+
+const controlledQuestion = (
+  question: string | undefined,
+  isNarrative: boolean,
+  storyFocus: string,
+  narrativeRole: NarrativeCardRole | undefined,
+  previousQuestions: string[],
+  targetSlot: CoverageSlot,
+): string => {
+  const candidate = (question || '').trim();
+  if (questionIsDuplicate(candidate, previousQuestions) || !questionMatchesSlot(candidate, targetSlot)) {
+    return slotFallbackQuestion(targetSlot, isNarrative);
+  }
+  if (isNarrative) {
+    const normalized = normalizeNarrativeQuestion(candidate, storyFocus, narrativeRole, previousQuestions);
+    return questionIsDuplicate(normalized, previousQuestions) || !questionMatchesSlot(normalized, targetSlot)
+      ? slotFallbackQuestion(targetSlot, true)
+      : normalized;
+  }
+  const questionMarks = (candidate.match(/[?？]/g) || []).length;
+  const bundled = /比如|例如|还是|或者|以及|哪些|and|or/i.test(candidate);
+  return candidate && questionMarks <= 1 && !bundled ? candidate : slotFallbackQuestion(targetSlot, false);
+};
+
+const controlledNarrativeEvidenceQuestion = (
+  candidate: string | undefined,
+  target: NarrativeEvidenceKey,
+  targetWasAsked: boolean,
+  previousQuestions: string[],
+): string => {
+  const question = (candidate || '').trim();
+  const marks = (question.match(/[?？]/g) || []).length;
+  const bundled = /比如|例如|还是|或者|以及|and|or/i.test(question);
+  if (
+    question &&
+    marks <= 1 &&
+    !bundled &&
+    !questionIsDuplicate(question, previousQuestions) &&
+    narrativeQuestionMatchesTarget(question, target)
+  ) return question;
+  return narrativeEvidenceQuestion(target, targetWasAsked);
+};
 
 const normalizeIdeaStatus = (status: unknown): IdeaValidationResult['status'] => {
   if (status === 'exceptional' || status === 'valid' || status === 'weak' || status === 'off_topic') return status;
@@ -472,9 +905,11 @@ export const validateIdea = async (topic: string, dimension: string, idea: strin
       analysis: { type: Type.STRING },
       focusArea: { type: Type.STRING },
       question: { type: Type.STRING },
-      hint: { type: Type.STRING }
+      hint: { type: Type.STRING },
+      gapDiagnosis: gapDiagnosisSchema,
+      coverageState: coverageStateSchema,
     },
-    required: ['status', 'feedbackTitle', 'analysis', 'focusArea', 'question', 'hint']
+    required: ['status', 'feedbackTitle', 'analysis', 'focusArea', 'question', 'hint', 'gapDiagnosis', 'coverageState']
   };
 
   const systemPrompt = 'You are a process-guiding critical-thinking writing mentor. Guide the student with one question at a time; do not write their argument for them. Respond in Chinese.';
@@ -482,17 +917,27 @@ export const validateIdea = async (topic: string, dimension: string, idea: strin
 
 Diagnose the single most important reasoning gap in this specific idea. The perspective label is context only; do not rely on fixed dimensions. Consider relevance, causal reasoning, evidence, assumptions, or another viewpoint, and select only the most useful one.
 
-Return a brief Chinese diagnosis and exactly one Socratic question that helps the student think further. Provide one optional short hint that clarifies how to approach the question without supplying an argument or answer. Do not provide ready-made points, examples that answer the question, or multiple questions. The question must be answerable by the student and clearly connected to their idea.`;
+Return a brief Chinese diagnosis and exactly one Socratic question that helps the student think further. Provide one optional short hint that clarifies how to approach the question without supplying an argument or answer. Do not provide ready-made points, examples that answer the question, or multiple questions. The question must be answerable by the student and clearly connected to their idea.
+
+Also return gapDiagnosis and coverageState. Choose exactly one gap type from evidence, causal_link, assumption, alternative_view, or scope. The evidence field must quote or closely identify a concrete phrase from the student's idea, not invent a problem. Mark the status as open when the gap remains, improving when the student has started to address it, and resolved only when the response contains enough detail for this stage. Explain in whyItMatters why this missing reasoning step matters. For coverageState, classify the claim, evidence, causal link, assumption, alternative viewpoint, and scope as covered, partial, or missing based only on the student's actual words. Set currentTargetSlot to the one missing slot that the question targets. Keep all fields in Chinese except type and slot.`;
 
   const res = await callAI(systemPrompt, userPrompt, schema);
   const parsed = safeJsonParse(res, 'validateIdea');
+  const initialDiagnosis = normalizeGapDiagnosis(parsed.gapDiagnosis, false);
+  const coverageState = normalizeCoverageState(parsed.coverageState, false, undefined, initialDiagnosis.slot);
+  const targetSlot = chooseTargetSlot(false, undefined, initialDiagnosis, coverageState, []);
+  const gapDiagnosis = alignDiagnosisToTarget(initialDiagnosis, targetSlot, false);
+  const question = controlledQuestion(parsed.question || '你能为这个观点提供什么具体依据？', false, dimension, undefined, [], targetSlot);
   return {
     status: normalizeIdeaStatus(parsed.status),
     feedbackTitle: parsed.feedbackTitle || '导师提问',
     analysis: parsed.analysis || '',
     focusArea: parsed.focusArea || '',
     initialIdea: idea,
-    conversation: [{ question: parsed.question || '你能为这个观点提供什么具体依据？', hint: parsed.hint || '' }],
+    conversation: [{ question, hint: parsed.hint || '', gapDiagnosis }],
+    gapDiagnosis,
+    gapHistory: [gapDiagnosis],
+    coverageState: { ...coverageState, askedSlots: [], currentTargetSlot: targetSlot },
     isComplete: false,
   };
 };
@@ -502,7 +947,7 @@ export const continueIdeaCoaching = async (
   dimension: string,
   initialIdea: string,
   conversation: IdeaCoachingTurn[]
-): Promise<Pick<IdeaValidationResult, 'status' | 'feedbackTitle' | 'analysis' | 'focusArea' | 'progressSummary' | 'remainingGap'> & { nextQuestion: string; nextHint: string }> => {
+): Promise<Pick<IdeaValidationResult, 'status' | 'feedbackTitle' | 'analysis' | 'focusArea' | 'progressSummary' | 'remainingGap'> & { nextQuestion: string; nextHint: string; gapDiagnosis: GapDiagnosis; coverageState: CoverageState }> => {
   const schema: Schema = {
     type: Type.OBJECT,
     properties: {
@@ -514,8 +959,10 @@ export const continueIdeaCoaching = async (
       remainingGap: { type: Type.STRING },
       nextQuestion: { type: Type.STRING },
       nextHint: { type: Type.STRING },
+      gapDiagnosis: gapDiagnosisSchema,
+      coverageState: coverageStateSchema,
     },
-    required: ['status', 'feedbackTitle', 'analysis', 'focusArea', 'progressSummary', 'remainingGap', 'nextQuestion', 'nextHint'],
+    required: ['status', 'feedbackTitle', 'analysis', 'focusArea', 'progressSummary', 'remainingGap', 'nextQuestion', 'nextHint', 'gapDiagnosis', 'coverageState'],
   };
 
   const systemPrompt = 'You are a process-guiding critical-thinking writing mentor. Respond in Chinese. Ask one focused Socratic question at a time and never write the student\'s argument for them.';
@@ -523,7 +970,12 @@ export const continueIdeaCoaching = async (
     `Round ${index + 1}\nCoach question: ${turn.question}\nStudent response: ${turn.studentResponse || ''}\nCoach feedback so far: ${turn.coachFeedback || ''}`
   ).join('\n\n');
   const canAskAnother = conversation.length < 2;
+  const priorAskedSlots = conversation
+    .map(turn => turn.gapDiagnosis?.slot)
+    .filter((slot): slot is CoverageSlot => !!slot);
   const userPrompt = `Topic: ${topic}\nStudent-selected perspective: ${dimension}\nInitial idea: ${initialIdea}\n\nConversation so far:\n${transcript}
+
+Previously targeted reasoning slots: ${priorAskedSlots.length > 0 ? priorAskedSlots.join(', ') : 'none'}
 
 Respond to the student's latest answer with concise, specific feedback. If an important reasoning gap remains and fewer than two question-answer rounds have occurred, ask exactly one next question. Otherwise leave nextQuestion empty and nextHint empty to finish.
 
@@ -536,11 +988,20 @@ Assessment consistency is essential:
 - These fields must not contradict each other. When finishing, calibrate the writing status in the wording: for example, a plausible explanation is ready to develop but still needs evidence. Do not use a numeric score.
 - If another question will be asked, leave progressSummary and remainingGap empty; the final assessment belongs after the last answer.
 - Keep the feedback supportive and specific; do not introduce unsupported facts.
+- Return gapDiagnosis using only one of evidence, causal_link, assumption, alternative_view, or scope, and set its slot to the matching reasoning element. Evidence must quote or closely identify a phrase from the student's latest answer. Set status to open, improving, or resolved according to the latest answer, and explain why the gap matters. Do not mark a gap resolved unless the latest answer actually addresses it. Return coverageState for all argumentative elements. A slot already asked and addressed must not be selected again; choose the next unaddressed slot.
 
 Can ask another question: ${canAskAnother ? 'yes' : 'no; finish now'}`;
 
   const res = await callAI(systemPrompt, userPrompt, schema);
   const parsed = safeJsonParse(res, 'continueIdeaCoaching');
+  const gapDiagnosis = normalizeGapDiagnosis(parsed.gapDiagnosis, false);
+  const rawCoverage = normalizeCoverageState(parsed.coverageState, false, undefined, gapDiagnosis.slot, priorAskedSlots);
+  const coverageState = { ...rawCoverage, askedSlots: Array.from(new Set([...rawCoverage.askedSlots, ...priorAskedSlots])) };
+  const targetSlot = chooseTargetSlot(false, undefined, gapDiagnosis, coverageState, priorAskedSlots);
+  const alignedDiagnosis = alignDiagnosisToTarget(gapDiagnosis, targetSlot, false);
+  const nextQuestion = canAskAnother && !coverageState.completionReady
+    ? controlledQuestion(parsed.nextQuestion, false, dimension, undefined, conversation.map(turn => turn.question), targetSlot)
+    : '';
   return {
     status: normalizeIdeaStatus(parsed.status),
     feedbackTitle: parsed.feedbackTitle || '本轮反馈',
@@ -548,8 +1009,10 @@ Can ask another question: ${canAskAnother ? 'yes' : 'no; finish now'}`;
     focusArea: parsed.focusArea || '',
     progressSummary: (parsed.progressSummary || '').trim(),
     remainingGap: (parsed.remainingGap || '').trim(),
-    nextQuestion: canAskAnother ? (parsed.nextQuestion || '').trim() : '',
-    nextHint: canAskAnother ? (parsed.nextHint || '').trim() : '',
+    nextQuestion,
+    nextHint: canAskAnother && !coverageState.completionReady ? (parsed.nextHint || '').trim() : '',
+    gapDiagnosis: alignedDiagnosis,
+    coverageState: { ...coverageState, currentTargetSlot: targetSlot },
   };
 };
 
@@ -607,7 +1070,26 @@ const normalizeNarrativeQuestion = (
     : narrativeQuestionFallback(storyFocus, narrativeRole, previousQuestions.length > 0);
 };
 
-export const validateNarrativeIdea = async (topic: string, storyFocus: string, idea: string, narrativeRole?: NarrativeCardRole): Promise<IdeaValidationResult> => {
+const narrativeRoleInstruction = (role: NarrativeCardRole): string => {
+  if (role === 'scene') return '本卡核心：关键事件是否清楚（eventAnchor），以及是否有至少一个来自学生经历的具体证据（concreteDetail）。具体证据可以是动作、物件特征、对话、环境变化或感官线索，不要求特定物件或感官。immediateResponse 是可选信息，不得因它缺失而阻止完成。';
+  if (role === 'response') return '本卡核心：关键时刻之后，学生采取了什么行动或作出什么回应（nextActionOrResponse）。immediateConsequence 是可选信息，不得因它缺失而阻止完成。不得重问场景细节。';
+  return '本卡核心：这段经历如何结束或产生了什么结果（outcomeOrEnding）。laterReflection 是可选信息，不得因它缺失而阻止完成。不得重问前面的行动过程。';
+};
+
+const narrativeCompletionFeedback = (role: NarrativeCardRole): string => {
+  if (role === 'scene') return '关键事件和具体叙事细节已经足以呈现这一刻；其他感官或情绪细节由你按写作需要决定是否加入。';
+  if (role === 'response') return '关键时刻之后的行动或回应已经清楚，后续写作可以据此展开。';
+  return '这段经历的结果已经清楚；事后认识可在写作时按需要展开。';
+};
+
+const narrativeEvidenceInstructions = (role: NarrativeCardRole): string => `只根据学生自己写出的原文分类，不把导师问题、导师提示或反馈算作学生证据。对每个字段返回状态和一段可在学生原文中逐字找到的短引文；没有依据时 quote 留空。不要把可选细节设为必需。${narrativeRoleInstruction(role)} 状态使用 covered、partial、missing、not_applicable 或 uncertain。若已足够明确则用 covered；部分表达用 partial；拿不准时用 uncertain。`;
+
+const studentAuthoredNarrativeText = (initialIdea: string, conversation: IdeaCoachingTurn[]): string => [
+  `Initial idea: ${initialIdea}`,
+  ...conversation.map((turn, index) => `Student response ${index + 1}: ${turn.studentResponse || ''}`),
+].join('\n');
+
+export const validateNarrativeIdea = async (topic: string, storyFocus: string, idea: string, narrativeRole: NarrativeCardRole = 'scene'): Promise<IdeaValidationResult> => {
   const schema: Schema = {
     type: Type.OBJECT,
     properties: {
@@ -616,29 +1098,45 @@ export const validateNarrativeIdea = async (topic: string, storyFocus: string, i
       analysis: { type: Type.STRING },
       focusArea: { type: Type.STRING },
       question: { type: Type.STRING },
-      hint: { type: Type.STRING }
+      hint: { type: Type.STRING },
+      narrativeEvidence: narrativeEvidenceSchema,
     },
-    required: ['status', 'feedbackTitle', 'analysis', 'focusArea', 'question', 'hint']
+    required: ['status', 'feedbackTitle', 'analysis', 'focusArea', 'question', 'hint', 'narrativeEvidence']
   };
 
   const systemPrompt = 'You are a narrative-writing process mentor for Chinese college students. Respond in Chinese. Help the learner develop their own lived or imagined story; never write it for them.';
   const userPrompt = `Writing prompt: ${topic}\nStudent-selected story focus: ${storyFocus}\nStudent's initial story idea: ${idea}
 
-Identify the single most useful next step in telling this personal experience. The narrativeRole is ${narrativeRole || 'inferred from the focus'} and is binding. A scene card asks only about one observable scene detail; a response card asks only about one action immediately after the described moment; an outcome card asks only about one ending, consequence, or later understanding. Never shift to another role. Ask about motives only when the student's own account makes a reason for an action unclear; do not frame the student as a literary character. Choose only one gap genuinely grounded in the student's idea.
+The current card role is ${narrativeRole}. ${narrativeRoleInstruction(narrativeRole)} Identify one likely missing core element for a possible next question. If the core information for this role is already present, leave question and hint empty. Return a concise diagnosis and one optional memory cue. Do not require all narrative details, infer unsupported story content, write the story, or ask about a different card role. Do not ask for a thesis, evidence, counterargument, or general opinion.
 
-Return a brief diagnosis and exactly one focused question. The question must target one recall task, not combine multiple prompts with "and", alternatives, or a list of details. Include one optional hint that helps the student recall or clarify their own experience without suggesting a plot or writing a sentence for them. Do not ask for a thesis, reasons, evidence, counterargument, or general opinion. Keep all three text fields in Chinese.`;
+Return one short question only if a core requirement remains unmet. The question must target one recall task and stay within the current card role. Include one optional hint that helps the student recall their own experience without suggesting a plot or writing a sentence for them. Keep feedback in Chinese.
+
+Return narrativeEvidence for every schema field using this rule: ${narrativeEvidenceInstructions(narrativeRole)} Evidence quotes must be copied exactly from the initial idea.`;
 
   const res = await callAI(systemPrompt, userPrompt, schema);
   const parsed = safeJsonParse(res, 'validateNarrativeIdea');
+  const assessment = normalizeNarrativeEvidence(parsed.narrativeEvidence);
+  const decision = decideNarrativeCoverage(narrativeRole, assessment, idea);
+  const gapDiagnosis = narrativeGapDiagnosis(decision, assessment);
+  const coverageState = narrativeCoverageState(narrativeRole, decision, []);
+  const question = decision.target
+    ? controlledNarrativeEvidenceQuestion(parsed.question, decision.target, decision.targetWasAsked, [])
+    : '';
+  const conversation = question ? [{ question, hint: parsed.hint || '', gapDiagnosis }] : [];
   return {
     status: normalizeIdeaStatus(parsed.status),
-    feedbackTitle: parsed.feedbackTitle || '故事构思提问',
-    analysis: parsed.analysis || '',
-    focusArea: parsed.focusArea || '故事细节',
+    feedbackTitle: parsed.feedbackTitle || (decision.completionReady ? '构思已足够清晰' : '故事构思提问'),
+    analysis: decision.completionReady ? narrativeCompletionFeedback(narrativeRole) : (parsed.analysis || ''),
+    focusArea: parsed.focusArea || storyFocus,
     narrativeRole,
     initialIdea: idea,
-    conversation: [{ question: normalizeNarrativeQuestion(parsed.question, storyFocus, narrativeRole), hint: parsed.hint || '' }],
-    isComplete: false,
+    conversation,
+    gapDiagnosis,
+    gapHistory: [gapDiagnosis],
+    coverageState,
+    isComplete: decision.completionReady,
+    progressSummary: decision.completionReady ? narrativeCompletionFeedback(narrativeRole) : undefined,
+    remainingGap: decision.completionReady ? '暂无必须补充的内容；可按需要继续丰富。' : undefined,
     writingMode: 'narrative'
   };
 };
@@ -649,7 +1147,7 @@ export const continueNarrativeCoaching = async (
   initialIdea: string,
   conversation: IdeaCoachingTurn[],
   narrativeRole?: NarrativeCardRole
-): Promise<Pick<IdeaValidationResult, 'status' | 'feedbackTitle' | 'analysis' | 'focusArea' | 'progressSummary' | 'remainingGap'> & { nextQuestion: string; nextHint: string }> => {
+): Promise<Pick<IdeaValidationResult, 'status' | 'feedbackTitle' | 'analysis' | 'focusArea' | 'progressSummary' | 'remainingGap'> & { nextQuestion: string; nextHint: string; gapDiagnosis: GapDiagnosis; coverageState: CoverageState }> => {
   const schema: Schema = {
     type: Type.OBJECT,
     properties: {
@@ -660,47 +1158,59 @@ export const continueNarrativeCoaching = async (
       progressSummary: { type: Type.STRING },
       remainingGap: { type: Type.STRING },
       nextQuestion: { type: Type.STRING },
-      nextHint: { type: Type.STRING }
+      nextHint: { type: Type.STRING },
+      narrativeEvidence: narrativeEvidenceSchema,
     },
-    required: ['status', 'feedbackTitle', 'analysis', 'focusArea', 'progressSummary', 'remainingGap', 'nextQuestion', 'nextHint']
+    required: ['status', 'feedbackTitle', 'analysis', 'focusArea', 'progressSummary', 'remainingGap', 'nextQuestion', 'nextHint', 'narrativeEvidence']
   };
 
   const transcript = conversation.map((turn, index) =>
     `Round ${index + 1}\nMentor question: ${turn.question}\nStudent response: ${turn.studentResponse || ''}\nMentor feedback: ${turn.coachFeedback || ''}`
   ).join('\n\n');
   const canAskAnother = conversation.length < 2;
+  const role = narrativeRole || 'scene';
+  const studentText = studentAuthoredNarrativeText(initialIdea, conversation);
+  const priorTargets = conversation
+    .map(turn => narrativeTargetFromPriorTurn(role, turn.gapDiagnosis))
+    .filter((target): target is NarrativeEvidenceKey => !!target);
   const systemPrompt = 'You are a narrative-writing process mentor. Respond in Chinese, focus on one story-development question at a time, and do not invent the student\'s story.';
-  const userPrompt = `Writing prompt: ${topic}\nStory focus: ${storyFocus}\nInitial story idea: ${initialIdea}\n\nConversation:\n${transcript}
+  const userPrompt = `Writing prompt: ${topic}\nStory focus: ${storyFocus}\nInitial story idea: ${initialIdea}\n\nConversation:\n${transcript}\n\nStudent-authored text to assess (only this text is evidence):\n${studentText}
 
-Give brief, specific feedback on the student's latest response. If one important story-development gap remains and fewer than two question-answer rounds have happened, ask exactly one new question. Otherwise set nextQuestion and nextHint to empty strings. The narrativeRole is ${narrativeRole || 'inferred from the focus'} and is binding across every round.
+The active role is ${role}; it cannot change. ${narrativeRoleInstruction(role)} Give concise feedback on the latest response without adding unsupported story details. Return narrativeEvidence by merging all student-authored material, not just the latest answer. ${narrativeEvidenceInstructions(role)} Evidence quotes must be copied exactly from the student-authored text.
 
-Choose only one relevant focus in the personal narrative: the key moment or context, what happened next, a response or choice, its consequence, a memorable detail, or a relevant reflection. Track what the student has already described, then ask about the single missing story beat that would most improve continuity. Keep the next question within the current card's role: an anchor card stays with observable scene details; a response card stays with the next action or immediate response; an outcome/reflection card stays with the ending or later meaning. Do not use one card to repair a gap that belongs to another card. For an outcome card, if the previous round already asked how the event ended, the next question must ask about one concrete later effect or changed understanding, never repeat the ending question. Keep the question narrow enough to answer from one memory; do not combine stage and audience, several people, multiple senses, or a sequence of separate prompts. Avoid broad wording such as "What happened on and off stage?" Ask about reasons for an action only when needed to understand the student's account; do not use literary character-analysis framing. Do not request a thesis, evidence, argument, or counterargument. Do not provide a plot, model story, or ready-made sentence.
-
-Assessment consistency:
-- analysis responds to the latest answer without adding unsupported details.
-- progressSummary names a story detail or narrative relationship the student clarified.
-- remainingGap identifies one useful detail still to develop, or says 暂无明显缺口.
-- If asking another question, ask only one short, focused question about one missing story beat. Do not use "比如", "例如", "还是", "或者", "以及", or a list of possible answers in the question. Do not bundle several subquestions, examples, locations, or people into it. Put any memory cue in the optional hint, and make the hint support that same focus without introducing another question.
-- If asking another question, leave progressSummary and remainingGap empty.
-- Keep feedback supportive, concise, and in Chinese.
-
-Can ask another question: ${canAskAnother ? 'yes' : 'no; finish now'}`;
+The program will choose the missing core element and calculate completion; do not decide completion yourself. Suggest one short question only if a core requirement remains unmet, and keep it within the active role. Do not require optional details, ask multiple senses, offer alternatives, or write a model sentence. If core information is sufficient, leave nextQuestion and nextHint empty. Progress summary should identify only details the student supplied. If information is sufficient, remainingGap should say 暂无必须补充的内容; otherwise identify only the current role's possible gap. Keep feedback supportive and concise. Do not request a thesis, evidence, argument, or counterargument. Another question allowed: ${canAskAnother ? 'yes' : 'no; finish now'}.`;
 
   const res = await callAI(systemPrompt, userPrompt, schema);
   const parsed = safeJsonParse(res, 'continueNarrativeCoaching');
+  const assessment = normalizeNarrativeEvidence(parsed.narrativeEvidence);
+  const decision = decideNarrativeCoverage(role, assessment, studentText, priorTargets);
+  const gapDiagnosis = narrativeGapDiagnosis(decision, assessment);
+  const coverageState = narrativeCoverageState(role, decision, priorTargets);
+  const nextQuestion = canAskAnother && decision.target
+    ? controlledNarrativeEvidenceQuestion(
+      parsed.nextQuestion,
+      decision.target,
+      decision.targetWasAsked,
+      conversation.map(turn => turn.question),
+    )
+    : '';
   return {
     status: normalizeIdeaStatus(parsed.status),
-    feedbackTitle: parsed.feedbackTitle || '本轮构思反馈',
-    analysis: parsed.analysis || '',
+    feedbackTitle: parsed.feedbackTitle || (decision.completionReady ? '本维度构思已足够清楚' : '本轮构思反馈'),
+    analysis: decision.completionReady ? narrativeCompletionFeedback(role) : (parsed.analysis || ''),
     focusArea: parsed.focusArea || '',
-    progressSummary: (parsed.progressSummary || '').trim(),
-    remainingGap: (parsed.remainingGap || '').trim(),
-    nextQuestion: canAskAnother && parsed.nextQuestion?.trim()
-      ? normalizeNarrativeQuestion(parsed.nextQuestion, storyFocus, narrativeRole, conversation.map(turn => turn.question))
-      : '',
-    nextHint: canAskAnother
+    progressSummary: decision.completionReady
+      ? narrativeCompletionFeedback(role)
+      : (parsed.progressSummary || '').trim(),
+    remainingGap: decision.completionReady
+      ? '暂无必须补充的内容；可按需要继续丰富。'
+      : ((parsed.remainingGap || '').trim() || '可继续补充：' + gapDiagnosis.label),
+    nextQuestion,
+    nextHint: nextQuestion
       ? normalizeNarrativeHint(parsed.nextHint, narrativeRole, conversation.length > 0)
-      : ''
+      : '',
+    gapDiagnosis,
+    coverageState,
   };
 };
 
@@ -1693,16 +2203,23 @@ export const evaluateRetrainingAttempt = async (
 // ─────────────────────────────────────────────
 
 export interface CtrlScore {
-  opinionConsistency: number;     // 观点一致性 0-10
-  argumentProgression: number;   // 论证递进性 0-10
-  linguisticAutonomy: number;    // 语言自主性 0-10
-  thoughtExpansion: number;      // 观点拓展度 0-10
+  opinionConsistency?: number;     // 议论文：观点一致性 0-10
+  argumentProgression?: number;   // 议论文：论证递进性 0-10
+  linguisticAutonomy?: number;    // 议论文旧量表：语言自主性 0-10
+  thoughtExpansion?: number;      // 议论文：观点拓展度 0-10
+  evidenceRecognition?: number;   // 记叙文：证据辨识与依据意识 0-10
+  reasoningJudgment?: number;     // 记叙文：推理与行动判断 0-10
+  selfMonitoringRevision?: number; // 记叙文：自我监控与修订 0-10
+  rubricVersion?: string;
   total: number;                 // 加权总分
   explanations: {
-    opinionConsistency: string;
-    argumentProgression: string;
-    linguisticAutonomy: string;
-    thoughtExpansion: string;
+    opinionConsistency?: string;
+    argumentProgression?: string;
+    linguisticAutonomy?: string;
+    thoughtExpansion?: string;
+    evidenceRecognition?: string;
+    reasoningJudgment?: string;
+    selfMonitoringRevision?: string;
   };
   overallComment: string;
   analyzedAt: string;
@@ -1728,10 +2245,20 @@ export const analyzeCtrlScore = async (processData: {
     const idea = userIdeas[card.id] || '（未填写）';
     const validation = validationResults[card.id];
     const expansion = personalizedExpansions[card.id] || [];
+    const studentResponses = Array.isArray(validation?.conversation)
+      ? validation.conversation
+          .map((turn: any, index: number) => turn?.studentResponse?.trim()
+            ? `  学生对追问的回答${index + 1}：${turn.studentResponse.trim()}`
+            : '')
+          .filter(Boolean)
+      : [];
     return [
       `【维度：${card.dimension}】`,
       `  学生原始观点：${idea}`,
+      ...studentResponses,
       validation ? `  苏格拉底反馈：${validation.analysis || ''}` : '',
+      validation?.gapDiagnosis ? `  当前缺口：${validation.gapDiagnosis.label}（状态：${validation.gapDiagnosis.status}）\n  缺口依据：${validation.gapDiagnosis.evidence || '未提供'}\n  缺口重要性：${validation.gapDiagnosis.whyItMatters || ''}` : '',
+      validation?.gapHistory?.length ? `  缺口诊断节点：${validation.gapHistory.length} 次` : '',
       expansion.length > 0 ? `  AI个性化拓展建议：\n    - ${expansion.join('\n    - ')}` : '',
     ].filter(Boolean).join('\n');
   }).join('\n\n');
@@ -1753,54 +2280,89 @@ export const analyzeCtrlScore = async (processData: {
         }))
       : [];
     const bodyDrafts = bodies.map((b) => b.draft.trim()).filter(Boolean);
-    const fullEssayForScan = [intro, ...bodyDrafts, concl].filter(Boolean).join('\n\n');
-    const transitionCue =
-      /\b(to begin with|first(ly)?|second(ly)?|third(ly)?|besides|moreover|furthermore|in addition|additionally|on the other hand|meanwhile|in contrast|for example|for instance|as a result|therefore|thus|in summary|in conclusion|overall|finally)\b/i;
-    const hasCueInBodies = bodyDrafts.some((d) => transitionCue.test(d));
-    const structuralHints = [
-      '【⚠️ 评分前必读：系统结构核查（基于字段内容自动生成，请严格遵守）】',
-      `▶ 引言段落：${intro ? `【存在】内容约 ${intro.length} 字，已显示在下方【引言】区域` : '【缺失】introduction 字段为空'}`,
-      `▶ 结论段落：${concl ? `【存在】内容约 ${concl.length} 字，已显示在下方【结论】区域` : '【缺失】conclusion 字段为空'}`,
-      `▶ 主体段落数：${bodyDrafts.length} 段`,
-      `▶ 主体衔接标记：${hasCueInBodies ? '检测到至少一处显性过渡词（To begin with / Besides / Moreover 等）' : '未检测到显性过渡词（仍可能有句内衔接，请通读判断）'}`,
-      '',
-      intro ? '✅ 引言已存在 → 评语中【禁止】出现"缺乏引言""没有 introduction""终稿仅有主体"等表述；应改评引言功能强弱（是否点题、预告主体）。' : '⚠️ 引言字段为空 → 可据此指出结构缺失。',
-      concl ? '✅ 结论已存在 → 评语中【禁止】出现"缺乏结论""没有 conclusion"等表述；应改评结论是否收束全文、是否回扣主体。' : '⚠️ 结论字段为空 → 可据此指出结构缺失。',
-    ].join('\n');
+    if (isNarrative) {
+      const storySections = bodies
+        .filter(section => section.draft.trim())
+        .map((section, index) => `【故事环节 ${index + 1}：${section.dimension || '未标注'}】\n${section.draft.trim()}`);
+      const fullStory = bodyDrafts.join('\n\n');
+      phase3Text = [
+        '【记叙文结构说明】以下内容按故事环节顺序组成完整叙事。开篇或结尾可以自然融入任一环节，不要求单独设置 introduction 或 conclusion 字段；不得仅因这两个字段为空而扣分。请评价事件是否自然开始、发展并结束。',
+        ...storySections,
+        '【完整故事（连续阅读）】',
+        fullStory || '（尚无故事正文）',
+      ].join('\n\n');
+    } else {
+      const fullEssayForScan = [intro, ...bodyDrafts, concl].filter(Boolean).join('\n\n');
+      const transitionCue =
+        /\b(to begin with|first(ly)?|second(ly)?|third(ly)?|besides|moreover|furthermore|in addition|additionally|on the other hand|meanwhile|in contrast|for example|for instance|as a result|therefore|thus|in summary|in conclusion|overall|finally)\b/i;
+      const hasCueInBodies = bodyDrafts.some((d) => transitionCue.test(d));
+      const structuralHints = [
+        '【⚠️ 评分前必读：系统结构核查（基于字段内容自动生成，请严格遵守）】',
+        `▶ 引言段落：${intro ? `【存在】内容约 ${intro.length} 字，已显示在下方【引言】区域` : '【缺失】introduction 字段为空'}`,
+        `▶ 结论段落：${concl ? `【存在】内容约 ${concl.length} 字，已显示在下方【结论】区域` : '【缺失】conclusion 字段为空'}`,
+        `▶ 主体段落数：${bodyDrafts.length} 段`,
+        `▶ 主体衔接标记：${hasCueInBodies ? '检测到至少一处显性过渡词（To begin with / Besides / Moreover 等）' : '未检测到显性过渡词（仍可能有句内衔接，请通读判断）'}`,
+        '',
+        intro ? '✅ 引言已存在 → 评语中【禁止】出现"缺乏引言""没有 introduction""终稿仅有主体"等表述；应改评引言功能强弱（是否点题、预告主体）。' : '⚠️ 引言字段为空 → 可据此指出结构缺失。',
+        concl ? '✅ 结论已存在 → 评语中【禁止】出现"缺乏结论""没有 conclusion"等表述；应改评结论是否收束全文、是否回扣主体。' : '⚠️ 结论字段为空 → 可据此指出结构缺失。',
+      ].join('\n');
 
-    const structuredParts: string[] = [structuralHints, ''];
-    if (intro) structuredParts.push(`【引言】\n${intro}`);
-    if (bodies.length > 0) {
-      structuredParts.push(
-        '【主体段落】',
-        ...bodies.map((b, i) => `  段落${i + 1}（${b.dimension || '维度未标注'}）\n${b.draft}`)
-      );
+      const structuredParts: string[] = [structuralHints, ''];
+      if (intro) structuredParts.push(`【引言】\n${intro}`);
+      if (bodies.length > 0) {
+        structuredParts.push(
+          '【主体段落】',
+          ...bodies.map((b, i) => `  段落${i + 1}（${b.dimension || '维度未标注'}）\n${b.draft}`)
+        );
+      }
+      if (concl) structuredParts.push(`【结论】\n${concl}`);
+      structuredParts.push('', '【终稿全文（连续阅读，用于判断段间衔接与首尾呼应）】', fullEssayForScan || '（无正文）');
+      phase3Text = structuredParts.join('\n\n');
     }
-    if (concl) structuredParts.push(`【结论】\n${concl}`);
-    structuredParts.push('', '【终稿全文（连续阅读，用于判断段间衔接与首尾呼应）】', fullEssayForScan || '（无正文）');
-    phase3Text = structuredParts.join('\n\n');
   }
 
+  const narrativeProperties = {
+    evidenceRecognition: { type: Type.NUMBER, description: '证据辨识与依据意识得分 0-10' },
+    reasoningJudgment: { type: Type.NUMBER, description: '推理与行动判断得分 0-10' },
+    selfMonitoringRevision: { type: Type.NUMBER, description: '自我监控与修订得分 0-10' },
+    explanations: {
+      type: Type.OBJECT,
+      properties: {
+        evidenceRecognition: { type: Type.STRING, description: '证据辨识与依据意识理由（2-3句）' },
+        reasoningJudgment: { type: Type.STRING, description: '推理与行动判断理由（2-3句）' },
+        selfMonitoringRevision: { type: Type.STRING, description: '自我监控与修订理由（2-3句）' },
+      },
+      required: ['evidenceRecognition', 'reasoningJudgment', 'selfMonitoringRevision'],
+    },
+  };
+  const argumentativeProperties = {
+    opinionConsistency: { type: Type.NUMBER, description: '观点一致性得分 0-10' },
+    argumentProgression: { type: Type.NUMBER, description: '论证递进性得分 0-10' },
+    linguisticAutonomy: { type: Type.NUMBER, description: '语言自主性得分 0-10' },
+    thoughtExpansion: { type: Type.NUMBER, description: '观点拓展度得分 0-10' },
+    explanations: {
+      type: Type.OBJECT,
+      properties: {
+        opinionConsistency: { type: Type.STRING, description: '观点一致性评分理由（2-3句）' },
+        argumentProgression: { type: Type.STRING, description: '论证递进性评分理由（2-3句）' },
+        linguisticAutonomy: { type: Type.STRING, description: '语言自主性评分理由（2-3句）' },
+        thoughtExpansion: { type: Type.STRING, description: '观点拓展度评分理由（2-3句）' },
+      },
+      required: ['opinionConsistency', 'argumentProgression', 'linguisticAutonomy', 'thoughtExpansion'],
+    },
+  };
   const schema: Schema = {
     type: Type.OBJECT,
     properties: {
-      opinionConsistency: { type: Type.NUMBER, description: isNarrative ? '叙事一致性得分 0-10' : '观点一致性得分 0-10' },
-      argumentProgression: { type: Type.NUMBER, description: isNarrative ? '事件推进与连贯性得分 0-10' : '论证递进性得分 0-10' },
-      linguisticAutonomy: { type: Type.NUMBER, description: '语言自主性得分 0-10' },
-      thoughtExpansion: { type: Type.NUMBER, description: isNarrative ? '细节与回望得分 0-10：评具体细节、反思和变化的展开质量' : '观点拓展度得分 0-10：评「选定方向上对AI建议的转化质量」，非是否采纳全部建议' },
-      explanations: {
-        type: Type.OBJECT,
-        properties: {
-          opinionConsistency: { type: Type.STRING, description: isNarrative ? '叙事一致性评分理由（2-3句）' : '观点一致性评分理由（2-3句）' },
-          argumentProgression: { type: Type.STRING, description: isNarrative ? '事件推进与连贯性评分理由（2-3句）' : '论证递进性评分理由（2-3句）' },
-          linguisticAutonomy: { type: Type.STRING, description: '语言自主性评分理由（2-3句）' },
-          thoughtExpansion: { type: Type.STRING, description: isNarrative ? '细节与回望理由（2-3句）：对照原始构想与终稿，评价场景细节、具体行动和事后理解的展开' : '观点拓展度理由（2-3句）：对照Phase1与终稿，写采纳方向上的深化质量；勿因未采纳某条AI建议而指责' },
-        },
-        required: ['opinionConsistency', 'argumentProgression', 'linguisticAutonomy', 'thoughtExpansion'],
-      },
-      overallComment: { type: Type.STRING, description: '总体评语（3-4句，结合四个维度综合评价学生的审辨思维表现）' },
+      ...(isNarrative ? narrativeProperties : argumentativeProperties),
+      overallComment: { type: Type.STRING, description: isNarrative ? '总体评语（3-4句，概括三项过程能力及下一步建议）' : '总体评语（3-4句，结合四个维度综合评价学生的审辨思维表现）' },
     },
-    required: ['opinionConsistency', 'argumentProgression', 'linguisticAutonomy', 'thoughtExpansion', 'explanations', 'overallComment'],
+    required: [
+      ...(isNarrative
+        ? ['evidenceRecognition', 'reasoningJudgment', 'selfMonitoringRevision']
+        : ['opinionConsistency', 'argumentProgression', 'linguisticAutonomy', 'thoughtExpansion']),
+      'explanations', 'overallComment',
+    ],
   };
 
   const argumentativeSystemPrompt = `你是一位大学英语写作研究专家，擅长评估学生的审辨性思维在写作过程中的体现。
@@ -1882,7 +2444,7 @@ ${phase3Text}
 
   const narrativeSystemPrompt = `你是一位大学英语叙事写作与学习科学专家，擅长评估学生在真实写作过程中的审辨性思维。
 
-请根据以下完整过程，评价记叙文中的四项能力。不要使用议论文术语，不要求 thesis、论点、论据、反方观点或因果论证。
+请根据以下完整过程，评价记叙文写作中的三项审辨思维过程能力。不要把故事写得流畅、细节丰富或语言准确本身当作审辨思维证据；不要使用议论文术语，也不要求 thesis、论点、论据、反方观点或形式化因果论证。
 
 写作题目：${topic}
 
@@ -1895,19 +2457,38 @@ ${phase2Text || '（未到达该阶段）'}
 Phase 3：完整故事
 ${phase3Text}
 
-评分维度：
-1. 叙事一致性（对应 opinionConsistency）：学生原始经历、导师追问后的路线图与终稿是否保持同一事件核心。
-2. 事件推进与连贯性（对应 argumentProgression）：场景、行动、反应、结果是否形成可理解的事件链，重点看是否补充了“接下来发生什么”。
-3. 语言自主性（对应 linguisticAutonomy）：终稿语言是否建立在学生自己的构想、回答和草稿基础上，是否出现与其过程明显不匹配的 AI 化替换。
-4. 细节与回望（对应 thoughtExpansion）：是否把原始概括发展成可感知的场景、具体动作、情绪变化以及事后理解；不因未采纳某条 AI 建议而扣分。
+【证据边界】
+- 学生证据包括初步构想、导师追问下学生自己的回答、学生修改过的路线图/草稿和最终故事。
+- AI导师的问题、诊断、反馈、建议及自动整理文本只提供教学情境，不是学生已具备该能力的证据。最终故事只能作为核对学生思考是否落实的辅助证据，不能替代过程证据。
+- 某种行为只在情境适用时评价。例如事件没有真实的多种可行选择时，不因学生没有讨论“其他可能”而扣分；学生有理由地保留原想法也可体现监控与判断。
+- 每项理由须指出具体学生原话/修改证据。证据不足时明确写“现有过程证据有限”，不要从流畅度、丰富度或AI文字推断学生思考。
 
-评分要求：每项 0-10 分，结合追问回答和终稿证据；overallComment 用中文写 3-4 句；每项 explanations 用中文写 2-3 句；只输出 JSON。`;
+评分维度（每项 0-10 分，三项等权平均为 total）：
+1. 证据辨识与依据意识（evidenceRecognition）：能否从经历中提取与当前事件判断相关的事实，并区分看见/听见/做过等观察内容与“我以为/我判断”等解释。看学生初步构想及其对导师追问的回答，不按细节数量打分。
+  9-10：能指出具体相关事实，并清楚区分事实与个人判断；依据与所述经历相符。
+  6-8：能提供相关事实或依据，但事实与判断的区分/关联说明尚不充分。
+  3-5：主要是结论、感受或笼统描述，依据很少，或把推测当作已观察事实。
+  0-2：几乎没有可辨认的经历事实支撑判断，且现有回答显示其未能识别所需依据。
+2. 推理与行动判断（reasoningJudgment）：能否说明事实如何影响自己的理解、选择或行动；只有在故事情境确有其他合理选择时，才观察其是否意识到其他可能及选择依据。
+  9-10：清楚解释依据与判断/行动之间的联系；适用时能比较合理选项并说明取舍。
+  6-8：能说明基本原因或选择依据，但联系较简略；其他可能只在适用时作为补充观察。
+  3-5：只报告结果或行动，原因与依据之间的联系含糊；不能仅因未写反方/其他可能而给此档。
+  0-2：对判断或行动没有可理解的依据说明，或理由与其提供的事实明显矛盾。
+3. 自我监控与修订（selfMonitoringRevision）：能否察觉原构想的信息缺口，并依据追问补充、修改或有理由地保留原判断。比较初步构想、学生回答、学生本人修订的路线图/草稿与终稿；AI自动生成/整理的内容不能算作学生修订。
+  9-10：能识别重要缺口，并作出有依据的修订；或能说明为何保留原想法，且终稿与其思考相符。
+  6-8：有可见补充、修改或有依据的保留，但缺口意识/修订理由不够充分。
+  3-5：虽然文本变长或更流畅，但看不出学生本人识别缺口或作出有依据的调整。
+  0-2：没有可见的自我检查、依据性修订或有理由的保留；须以学生过程记录为据，不因未改写本身自动判低分。
+
+结构评分边界：不要求记叙文单独设置议论文式 introduction/conclusion。若开篇场景或事件结果已自然融入故事环节，按完整叙事结构评价；不得因为 introduction/conclusion 字段为空而扣分。
+
+overallComment 用中文写 3-4 句，概括学生可见的思维行为及下一步可练习点；每项 explanations 用中文写 2-3 句并引用具体学生证据；只输出 JSON。`;
   const systemPrompt = isNarrative ? narrativeSystemPrompt : argumentativeSystemPrompt;
   const raw = await callAI(systemPrompt, '审辨信度分析', schema);
   const parsed = safeJsonParse(raw, 'analyzeCtrlScore');
 
   // 后处理兜底：若 AI 在引言/结论存在的情况下仍写了"缺乏引言/结论"，自动修正评语
-  if (assembledEssay && parsed.explanations?.argumentProgression) {
+  if (!isNarrative && assembledEssay && parsed.explanations?.argumentProgression) {
     const intro = (assembledEssay.introduction || '').trim();
     const concl = (assembledEssay.conclusion || '').trim();
     let exp: string = parsed.explanations.argumentProgression;
@@ -1924,6 +2505,28 @@ ${phase3Text}
 
   // 确保分数在合理范围内
   const clamp = (v: number) => Math.min(10, Math.max(0, Math.round(v * 10) / 10));
+  const explanations = parsed.explanations || {};
+  if (isNarrative) {
+    const evidenceRecognition = clamp(parsed.evidenceRecognition ?? 5);
+    const reasoningJudgment = clamp(parsed.reasoningJudgment ?? 5);
+    const selfMonitoringRevision = clamp(parsed.selfMonitoringRevision ?? 5);
+    return {
+      evidenceRecognition,
+      reasoningJudgment,
+      selfMonitoringRevision,
+      rubricVersion: 'narrative-ct-v2',
+      total: Math.round(((evidenceRecognition + reasoningJudgment + selfMonitoringRevision) / 3) * 10) / 10,
+      explanations: {
+        evidenceRecognition: explanations.evidenceRecognition || '',
+        reasoningJudgment: explanations.reasoningJudgment || '',
+        selfMonitoringRevision: explanations.selfMonitoringRevision || '',
+      },
+      overallComment: parsed.overallComment || '',
+      analyzedAt: new Date().toISOString(),
+      writingMode,
+    };
+  }
+
   const oc = clamp(parsed.opinionConsistency ?? 5);
   const ap = clamp(parsed.argumentProgression ?? 5);
   const la = clamp(parsed.linguisticAutonomy ?? 5);
@@ -1936,11 +2539,11 @@ ${phase3Text}
     linguisticAutonomy: la,
     thoughtExpansion: te,
     total,
-    explanations: parsed.explanations || {
-      opinionConsistency: '',
-      argumentProgression: '',
-      linguisticAutonomy: '',
-      thoughtExpansion: '',
+    explanations: {
+      opinionConsistency: explanations.opinionConsistency || '',
+      argumentProgression: explanations.argumentProgression || '',
+      linguisticAutonomy: explanations.linguisticAutonomy || '',
+      thoughtExpansion: explanations.thoughtExpansion || '',
     },
     overallComment: parsed.overallComment || '',
     analyzedAt: new Date().toISOString(),

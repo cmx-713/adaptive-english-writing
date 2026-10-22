@@ -18,6 +18,19 @@ const CTRL_DIMS = [
     { key: 'thoughtExpansion',    label: '观点拓展度', weight: 20, color: '#8b5cf6' },
 ] as const;
 
+const NARRATIVE_CTRL_DIMS = [
+    { key: 'evidenceRecognition', label: '证据辨识与依据意识', weight: 33.3, color: '#2563eb' },
+    { key: 'reasoningJudgment', label: '推理与行动判断', weight: 33.3, color: '#059669' },
+    { key: 'selfMonitoringRevision', label: '自我监控与修订', weight: 33.4, color: '#d97706' },
+] as const;
+
+const LEGACY_NARRATIVE_CTRL_DIMS = [
+    { key: 'opinionConsistency', label: '叙事一致性', weight: 25, color: '#3b82f6' },
+    { key: 'argumentProgression', label: '事件推进与连贯性', weight: 30, color: '#10b981' },
+    { key: 'linguisticAutonomy', label: '语言自主性', weight: 25, color: '#f59e0b' },
+    { key: 'thoughtExpansion', label: '细节与回望', weight: 20, color: '#8b5cf6' },
+] as const;
+
 const CtrlScorePanel: React.FC<{
     processId: string;
     ctrlScore: CtrlScore | null;
@@ -35,6 +48,10 @@ const CtrlScorePanel: React.FC<{
 
     const source: string = (score as any)?.source || 'teacher_manual';
     const reviewed: boolean = (score as any)?.reviewed === true;
+    const isNarrative = processData.writing_mode === 'narrative'
+        || score?.writingMode === 'narrative'
+        || (Array.isArray(processData.inspiration_cards) && processData.inspiration_cards.some((card: any) => !!card?.narrativeRole));
+    const isCurrentNarrativeRubric = isNarrative && score?.rubricVersion === 'narrative-ct-v2';
 
     const handleMarkReviewed = async () => {
         setIsMarking(true);
@@ -180,9 +197,9 @@ const CtrlScorePanel: React.FC<{
                 </div>
             </div>
 
-            {/* 四维评分 */}
+            {/* 评分维度 */}
             <div className="p-4 space-y-3">
-                {CTRL_DIMS.map(({ key, label, weight, color }) => {
+                {(isCurrentNarrativeRubric ? NARRATIVE_CTRL_DIMS : isNarrative ? LEGACY_NARRATIVE_CTRL_DIMS : CTRL_DIMS).map(({ key, label, weight, color }) => {
                     const val = score[key as keyof CtrlScore] as number;
                     const expl = score.explanations?.[key as keyof typeof score.explanations] || '';
                     return (
@@ -220,12 +237,24 @@ const CtrlScorePanel: React.FC<{
 
             {/* 公式说明 */}
             <div className="px-4 pb-3">
+                {isCurrentNarrativeRubric ? (
+                    <p className="text-[10px] text-slate-400 text-center">
+                        记叙文审辨信度 = 三项思维过程能力等权平均；故事质量另由作文批改评价
+                    </p>
+                ) : isNarrative ? (
+                    <p className="text-[10px] text-slate-400 text-center">
+                        历史记录使用旧版记叙文量表；重新分析后将按新版三项思维过程能力评分
+                    </p>
+                ) : (
+                    <>
                         <p className="text-[10px] text-slate-300 text-center">
                             审辨信度 = 观点一致性×25% + 论证递进性×30% + 语言自主性×25% + 观点拓展度×20%
                         </p>
                         <p className="text-[10px] text-slate-300 text-center mt-0.5">
                             论证递进性考察：①中文观点→英语段落的展开质量；②多段落在终稿中的结构整合（过渡/引言/结论）
                         </p>
+                    </>
+                )}
             </div>
         </div>
     );
@@ -372,6 +401,33 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                                                                 <div className={`rounded p-2 mb-2 border ${vConfig?.color || ''}`}>
                                                                     <span className="text-[10px] font-bold uppercase block mb-0.5 opacity-70">思考诊断 · {validation.focusArea || (isNarrativeCard ? '故事构思' : '观点分析')}</span>
                                                                     <p className="text-xs leading-relaxed opacity-90">{validation.analysis}</p>
+                                                                </div>
+                                                            )}
+
+                                                            {validation?.gapDiagnosis && (
+                                                                <div className="rounded border border-amber-200 bg-amber-50/70 p-2 mb-2">
+                                                                    <div className="flex items-center justify-between gap-2 mb-1">
+                                                                        <span className="text-[10px] font-bold text-amber-800">缺口闭环 · {validation.gapDiagnosis.label}</span>
+                                                                        <span className="text-[10px] font-bold text-amber-700">
+                                                                            {validation.gapDiagnosis.status === 'resolved' ? '已补足' : validation.gapDiagnosis.status === 'improving' ? '正在补足' : '尚未补足'}
+                                                                        </span>
+                                                                    </div>
+                                                                    {validation.gapDiagnosis.evidence && (
+                                                                        <p className="text-[11px] leading-relaxed text-slate-700">
+                                                                            <span className="font-bold">依据：</span>{validation.gapDiagnosis.evidence}
+                                                                        </p>
+                                                                    )}
+                                                                    <p className="mt-1 text-[11px] leading-relaxed text-slate-700">
+                                                                        <span className="font-bold">重要性：</span>{validation.gapDiagnosis.whyItMatters}
+                                                                    </p>
+                                                                    {validation.coverageState && (
+                                                                        <p className="mt-1 text-[10px] text-slate-500">
+                                                                            已覆盖 {validation.coverageState.coveredSlots?.length || 0} 项，待补强 {(validation.coverageState.missingSlots?.length || 0) + (validation.coverageState.partialSlots?.length || 0)} 项。
+                                                                        </p>
+                                                                    )}
+                                                                    {Array.isArray(validation.gapHistory) && validation.gapHistory.length > 1 && (
+                                                                        <p className="mt-1 text-[10px] text-slate-500">已记录 {validation.gapHistory.length} 个诊断节点，可与下方追问和学生回答对照查看。</p>
+                                                                    )}
                                                                 </div>
                                                             )}
 

@@ -93,6 +93,11 @@ export interface InspirationHistoryData {
   cards: InspirationCard[];
   userInputs: Record<string, string>;
   writingMode?: WritingMode;
+  dimensionDrafts?: Record<string, DimensionDraft>;
+  validationResults?: Record<string, unknown>;
+  personalizedExpansions?: Record<string, string[]>;
+  assembledEssay?: { introduction: string; bodyParagraphs: { dimension: string; draft: string }[]; conclusion: string } | null;
+  submittedAt?: string;
 }
 
 export interface DrillHistoryData {

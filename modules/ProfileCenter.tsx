@@ -13,8 +13,12 @@ interface CtrlScoreStudentView {
   argumentProgression?: number;
   linguisticAutonomy?: number;
   thoughtExpansion?: number;
+  evidenceRecognition?: number;
+  reasoningJudgment?: number;
+  selfMonitoringRevision?: number;
+  rubricVersion?: string;
   total?: number;
-  explanations?: Partial<Record<'opinionConsistency' | 'argumentProgression' | 'linguisticAutonomy' | 'thoughtExpansion', string>>;
+  explanations?: Partial<Record<'opinionConsistency' | 'argumentProgression' | 'linguisticAutonomy' | 'thoughtExpansion' | 'evidenceRecognition' | 'reasoningJudgment' | 'selfMonitoringRevision', string>>;
   overallComment?: string;
   analyzedAt?: string;
   writingMode?: 'argumentative' | 'narrative';
@@ -41,6 +45,12 @@ const CTRL_DIMS_STUDENT: readonly {
 ];
 
 const CTRL_DIMS_NARRATIVE = [
+  { key: 'evidenceRecognition' as const, label: '证据辨识与依据意识', weight: 33.3, color: '#2563eb' },
+  { key: 'reasoningJudgment' as const, label: '推理与行动判断', weight: 33.3, color: '#059669' },
+  { key: 'selfMonitoringRevision' as const, label: '自我监控与修订', weight: 33.4, color: '#d97706' },
+] as const;
+
+const CTRL_DIMS_NARRATIVE_LEGACY = [
   { key: 'opinionConsistency' as const, label: '叙事一致性', weight: 25, color: '#3b82f6' },
   { key: 'argumentProgression' as const, label: '事件推进与连贯性', weight: 30, color: '#10b981' },
   { key: 'linguisticAutonomy' as const, label: '语言自主性', weight: 25, color: '#f59e0b' },
@@ -1278,7 +1288,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                           onClick={() => setShowCtrlDimensions(!showCtrlDimensions)}
                           className="w-full flex items-center justify-between px-3 py-2 bg-purple-50/80 hover:bg-purple-50 border border-purple-100 rounded-lg transition-colors text-xs font-bold text-purple-800"
                         >
-                          <span>📊 {showCtrlDimensions ? '收起' : '展开'}{latest.writingMode === 'narrative' ? '叙事四维得分与要点' : '四维得分与要点'}</span>
+                          <span>📊 {showCtrlDimensions ? '收起' : '展开'}{latest.writingMode === 'narrative' ? latest.detail?.rubricVersion === 'narrative-ct-v2' ? '记叙文三项思维能力与要点' : '记叙文旧版评分维度与要点' : '四维得分与要点'}</span>
                           <span className={`transform transition-transform ${showCtrlDimensions ? 'rotate-180' : ''}`}>▼</span>
                         </button>
                         {showCtrlDimensions && (
@@ -1286,7 +1296,9 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                             <p className="text-[10px] text-slate-400">
                               以下为你最近一次{latest.writingMode === 'narrative' ? '记叙文' : '议论文'}审辨写作训练（{latest.topic?.slice(0, 24)}{latest.topic && latest.topic.length > 24 ? '…' : ''}）的参考反馈；各维度满分 10 分。
                             </p>
-                            {(latest.writingMode === 'narrative' ? CTRL_DIMS_NARRATIVE : CTRL_DIMS_STUDENT).map(({ key, label, weight, color }) => {
+                            {(latest.writingMode === 'narrative'
+                              ? latest.detail?.rubricVersion === 'narrative-ct-v2' ? CTRL_DIMS_NARRATIVE : CTRL_DIMS_NARRATIVE_LEGACY
+                              : CTRL_DIMS_STUDENT).map(({ key, label, weight, color }) => {
                               const val = typeof d[key] === 'number' ? d[key] as number : 0;
                               const expl = d.explanations?.[key]?.trim() || '';
                               return (

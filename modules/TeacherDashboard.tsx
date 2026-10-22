@@ -455,13 +455,15 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
         const header = [
             '姓名', '学号', '班级',
             '分析次数', '平均总分', '首次总分', '最新总分', '分数变化',
-            '平均观点一致性', '平均论证递进性', '平均语言自主性', '平均观点拓展度',
+            '议论文平均观点一致性', '议论文平均论证递进性', '议论文平均语言自主性', '议论文平均观点拓展度',
+            '平均证据辨识与依据意识', '平均推理与行动判断', '平均自我监控与修订',
         ];
         for (let i = 1; i <= maxCount; i++) {
             header.push(
-                `第${i}次题目`, `第${i}次总分`,
-                `第${i}次观点一致性`, `第${i}次论证递进性`,
-                `第${i}次语言自主性`, `第${i}次观点拓展度`,
+                `第${i}次题目`, `第${i}次文体`, `第${i}次总分`,
+                `第${i}次旧量表维度1（议论文/旧版记叙文）`, `第${i}次旧量表维度2（议论文/旧版记叙文）`,
+                `第${i}次旧量表维度3（议论文/旧版记叙文）`, `第${i}次旧量表维度4（议论文/旧版记叙文）`,
+                `第${i}次证据辨识与依据意识`, `第${i}次推理与行动判断`, `第${i}次自我监控与修订`,
                 `第${i}次分析时间`,
             );
         }
@@ -485,17 +487,25 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
             const latest = scores[scores.length - 1].toFixed(1);
             const delta = (scores[scores.length - 1] - scores[0]).toFixed(1);
 
-            const dims = ['opinionConsistency', 'argumentProgression', 'linguisticAutonomy', 'thoughtExpansion'];
-            const dimAvgs = dims.map(d => {
-                const vals = records.map((t: any) => t.ctrl_score[d] ?? 0);
-                return (vals.reduce((a: number, b: number) => a + b, 0) / vals.length).toFixed(1);
+            const isNarrativeRecord = (t: any) => t.writing_mode === 'narrative'
+                || t.ctrl_score?.writingMode === 'narrative'
+                || t.ctrl_score?.rubricVersion === 'narrative-ct-v2';
+            const argumentativeRecords = records.filter((t: any) => !isNarrativeRecord(t));
+            const currentNarrativeRecords = records.filter((t: any) => isNarrativeRecord(t) && t.ctrl_score?.rubricVersion === 'narrative-ct-v2');
+            const dimAvgs = ['opinionConsistency', 'argumentProgression', 'linguisticAutonomy', 'thoughtExpansion'].map(d => {
+                const vals = argumentativeRecords.map((t: any) => t.ctrl_score?.[d]).filter((v: any) => typeof v === 'number');
+                return vals.length ? (vals.reduce((a: number, b: number) => a + b, 0) / vals.length).toFixed(1) : '';
+            });
+            const narrativeDimAvgs = ['evidenceRecognition', 'reasoningJudgment', 'selfMonitoringRevision'].map(d => {
+                const vals = currentNarrativeRecords.map((t: any) => t.ctrl_score?.[d]).filter((v: any) => typeof v === 'number');
+                return vals.length ? (vals.reduce((a: number, b: number) => a + b, 0) / vals.length).toFixed(1) : '';
             });
 
             const row: string[] = [
                 s.name || '', s.student_id || '', s.class_name || '',
                 String(records.length), avg, first, latest,
                 Number(delta) > 0 ? `+${delta}` : delta,
-                ...dimAvgs,
+                ...dimAvgs, ...narrativeDimAvgs,
             ];
 
             // 逐次追加
@@ -503,17 +513,22 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                 if (i < records.length) {
                     const t = records[i];
                     const cs = t.ctrl_score;
+                    const narrative = isNarrativeRecord(t);
                     row.push(
                         t.topic || '',
+                        narrative ? '记叙文' : '议论文',
                         String(cs.total ?? ''),
                         String(cs.opinionConsistency ?? ''),
                         String(cs.argumentProgression ?? ''),
                         String(cs.linguisticAutonomy ?? ''),
                         String(cs.thoughtExpansion ?? ''),
+                        String(cs.evidenceRecognition ?? ''),
+                        String(cs.reasoningJudgment ?? ''),
+                        String(cs.selfMonitoringRevision ?? ''),
                         cs.analyzedAt ? new Date(cs.analyzedAt).toLocaleString('zh-CN') : '',
                     );
                 } else {
-                    row.push('', '', '', '', '', '', '');
+                    row.push('', '', '', '', '', '', '', '', '', '', '');
                 }
             }
             rows.push(row);

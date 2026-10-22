@@ -68,6 +68,16 @@ export const getHistory = (typeFilter?: HistoryDataType): HistoryItem[] => {
   }
 };
 
+export const updateHistoryItemData = (id: string, patch: Record<string, unknown>): HistoryItem[] => {
+  const history = getHistory();
+  const updated = history.map(item => item.id === id
+    ? { ...item, data: { ...(item.data as object), ...patch } as HistoryItem['data'] }
+    : item
+  );
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+  return updated;
+};
+
 export const deleteFromHistory = (id: string): HistoryItem[] => {
   const history = getHistory();
   const newHistory = history.filter(item => item.id !== id);

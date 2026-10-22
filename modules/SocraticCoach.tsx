@@ -6,8 +6,8 @@ import ResultsDisplay from '../components/ResultsDisplay';
 import HistoryModal from '../components/HistoryModal';
 import UiIcon from '../components/UiIcon';
 import { fetchInspirationCards, fetchLanguageScaffolds, fetchNarrativePlanningCards, fetchNarrativeLanguageScaffolds, generateEssayIntroConclusion, analyzeCtrlScore } from '../services/geminiService';
-import { getHistory, deleteFromHistory, saveToHistory, checkIsSaved } from '../services/storageService';
-import { saveScaffoldToSupabase, saveInspirationToSupabase, updateScaffoldDraft, saveAssembledEssayToSupabase, logAgentUsage, createThinkingProcess, updateThinkingProcess, saveCtrlScore, upsertVocabularyBank, upsertCollocationBank, getLatestUnfinishedThinkingProcess } from '../services/supabaseDataService';
+import { getHistory, deleteFromHistory, saveToHistory, checkIsSaved, updateHistoryItemData } from '../services/storageService';
+import { saveScaffoldToSupabase, saveInspirationToSupabase, updateScaffoldDraft, saveAssembledEssayToSupabase, logAgentUsage, createThinkingProcess, updateThinkingProcess, saveCtrlScore, upsertVocabularyBank, upsertCollocationBank, getLatestUnfinishedThinkingProcess, getThinkingProcessByUser } from '../services/supabaseDataService';
 import { UserInput, InspirationCard, ScaffoldContent, FlowState, HistoryItem, InspirationHistoryData, DimensionDraft, WritingMode } from '../types';
 import { IdeaValidationResult } from '../services/geminiService';
 
@@ -54,6 +54,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   // History State
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
+  const localThinkingHistoryIdRef = useRef<string | null>(null);
 
   // 会话计时
   const sessionStartRef = useRef<number>(Date.now());
@@ -68,6 +69,23 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     const inspirations = getHistory('inspiration');
     setHistoryItems([...scaffolds, ...inspirations].sort((a, b) => b.timestamp - a.timestamp));
   };
+
+  useEffect(() => {
+    const historyId = localThinkingHistoryIdRef.current;
+    if (!historyId || flowState === 'input_topic' || flowState === 'loading_cards') return;
+    const timer = setTimeout(() => {
+      updateHistoryItemData(historyId, {
+        cards,
+        userInputs: step1Inputs,
+        writingMode,
+        dimensionDrafts,
+        validationResults: restoredValidationResults,
+        personalizedExpansions,
+        assembledEssay,
+      });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [cards, step1Inputs, writingMode, dimensionDrafts, restoredValidationResults, personalizedExpansions, assembledEssay, flowState]);
 
   useEffect(() => {
     if (isHistoryOpen) refreshHistory();
@@ -122,7 +140,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   const handleTopicSubmit = async (input: UserInput) => {
     setFlowState('loading_cards');
     setCurrentTopic(input.topic);
-    const selectedWritingMode = input.writingMode || 'argumentative';
+    const selectedWritingMode = writingMode;
     setWritingMode(selectedWritingMode);
     setError(null);
     sessionStartRef.current = Date.now(); // 重置会话计时
@@ -148,7 +166,8 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
         userInputs: {},
         writingMode: selectedWritingMode
       };
-      saveToHistory(input.topic, historyData, 'inspiration');
+      const historyRecord = saveToHistory(input.topic, historyData, 'inspiration');
+      localThinkingHistoryIdRef.current = historyRecord.id;
       // Supabase 双写（异步，不阻断前端）
       if (supabaseUserId) {
         saveInspirationToSupabase(supabaseUserId, input.topic, fetchedCards, {}, selectedWritingMode).catch(() => { });
@@ -286,6 +305,9 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   // 观点验证完成回调（从 PhaseOneCards 接收验证结果）
   const handleValidationComplete = (cardId: string, result: IdeaValidationResult) => {
     const resultWithMode = { ...result, writingMode };
+    // PhaseOneCards unmounts while the student writes in the scaffold view.
+    // Keep its coaching transcript in parent state so it can be restored on return.
+    setRestoredValidationResults(prev => ({ ...prev, [cardId]: resultWithMode }));
     // 合并到累积结果中
     validationResultsRef.current = { ...validationResultsRef.current, [cardId]: resultWithMode };
     coachingTurnsRef.current = {
@@ -394,20 +416,22 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
         status: 'completed'
       }).catch(() => { });
 
-      // 后台自动分析审辨信度（B方案：学生完成Phase3即触发）
-      const processId = thinkingProcessIdRef.current;
-      analyzeCtrlScore({
-        topic: currentTopic,
-        inspirationCards: cards,
-        userIdeas: step1Inputs,
-        validationResults: validationResultsRef.current,
-        personalizedExpansions,
-        dimensionDrafts,
-        assembledEssay: { introduction: '', bodyParagraphs, conclusion: '' },
-        writingMode,
-      }).then(result => {
-        saveCtrlScore(processId, { ...result, source: 'auto', reviewed: false });
-      }).catch(() => { /* 静默处理，不影响主流程 */ });
+      // 议论文在进入组合阶段时维持原评分时机；记叙文等学生提交完整故事后再评分。
+      if (writingMode !== 'narrative') {
+        const processId = thinkingProcessIdRef.current;
+        analyzeCtrlScore({
+          topic: currentTopic,
+          inspirationCards: cards,
+          userIdeas: step1Inputs,
+          validationResults: validationResultsRef.current,
+          personalizedExpansions,
+          dimensionDrafts,
+          assembledEssay: { introduction: '', bodyParagraphs, conclusion: '' },
+          writingMode,
+        }).then(result => {
+          saveCtrlScore(processId, { ...result, source: 'auto', reviewed: false });
+        }).catch(() => { /* 静默处理，不影响主流程 */ });
+      }
     }
   };
 
@@ -458,6 +482,19 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       assembledEssay.conclusion
     ].filter(p => p.trim()).join('\n\n');
 
+    if (localThinkingHistoryIdRef.current) {
+      updateHistoryItemData(localThinkingHistoryIdRef.current, {
+        cards,
+        userInputs: step1Inputs,
+        writingMode,
+        dimensionDrafts,
+        validationResults: restoredValidationResults,
+        personalizedExpansions,
+        assembledEssay,
+        submittedAt: new Date().toISOString(),
+      });
+    }
+
     // Supabase: 保存组合成文
     if (supabaseUserId && fullEssay.trim()) {
       saveAssembledEssayToSupabase(supabaseUserId, currentTopic, fullEssay, writingMode).catch(() => { });
@@ -467,6 +504,22 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     }
 
     onSendToGrader(currentTopic, fullEssay, writingMode);
+
+    if (writingMode === 'narrative' && thinkingProcessIdRef.current && fullEssay.trim()) {
+      const processId = thinkingProcessIdRef.current;
+      analyzeCtrlScore({
+        topic: currentTopic,
+        inspirationCards: cards,
+        userIdeas: step1Inputs,
+        validationResults: validationResultsRef.current,
+        personalizedExpansions,
+        dimensionDrafts,
+        assembledEssay,
+        writingMode,
+      }).then(result => {
+        saveCtrlScore(processId, { ...result, source: 'auto', reviewed: false });
+      }).catch(() => { /* 静默处理，不影响提交流程 */ });
+    }
 
     // 同步组合成文内容和状态到思维过程记录
     if (thinkingProcessIdRef.current) {
@@ -497,16 +550,56 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     currentDraftRef.current = '';
     validationResultsRef.current = {};
     thinkingProcessIdRef.current = null;
+    localThinkingHistoryIdRef.current = null;
   };
 
   // History Handlers
-  const handleSelectHistoryItem = (item: HistoryItem) => {
+  const findRelatedThinkingProcess = async (historyRecord?: HistoryItem) => {
+    if (!supabaseUserId || !historyRecord) return null;
+    try {
+      const { data } = await getThinkingProcessByUser(supabaseUserId);
+      const recordMode = historyRecord.dataType === 'inspiration'
+        ? (historyRecord.data as InspirationHistoryData).writingMode
+        : (historyRecord.data as ScaffoldContent).writingMode;
+      const candidates = (data || []).filter((process: any) => {
+        if (process.topic !== historyRecord.topic) return false;
+        if (!recordMode) return true;
+        const processMode = process.writing_mode === 'narrative'
+          || (Array.isArray(process.inspiration_cards) && process.inspiration_cards.some((card: any) => !!card?.narrativeRole))
+          ? 'narrative'
+          : 'argumentative';
+        return processMode === recordMode;
+      });
+      if (!candidates.length) return null;
+      return candidates.sort((a: any, b: any) => {
+        const recordTime = historyRecord.timestamp;
+        const timeA = Math.abs(new Date(a.created_at).getTime() - recordTime);
+        const timeB = Math.abs(new Date(b.created_at).getTime() - recordTime);
+        return timeA - timeB;
+      })[0];
+    } catch (err) {
+      console.warn('[ThinkingHistory] 恢复云端写作过程失败，改用本地记录:', err);
+      return null;
+    }
+  };
+
+  const handleSelectHistoryItem = async (item: HistoryItem) => {
     if (item.dataType === 'scaffold') {
       const scaffold = item.data as ScaffoldContent;
-      const relatedInspiration = historyItems.find(historyItem =>
-        historyItem.dataType === 'inspiration' && historyItem.topic === item.topic
-      );
-      const inspiration = relatedInspiration?.data as InspirationHistoryData | undefined;
+      const relatedInspiration = historyItems
+        .filter(historyItem => historyItem.dataType === 'inspiration' && historyItem.topic === item.topic)
+        .sort((a, b) => Math.abs(a.timestamp - item.timestamp) - Math.abs(b.timestamp - item.timestamp))[0];
+      const cloudProcess = await findRelatedThinkingProcess(relatedInspiration || item);
+      const localInspiration = relatedInspiration?.data as InspirationHistoryData | undefined;
+      const inspiration = cloudProcess ? {
+        cards: Array.isArray(cloudProcess.inspiration_cards) ? cloudProcess.inspiration_cards : localInspiration?.cards,
+        userInputs: cloudProcess.user_ideas || localInspiration?.userInputs,
+        writingMode: cloudProcess.writing_mode || localInspiration?.writingMode,
+        dimensionDrafts: cloudProcess.dimension_drafts && Object.keys(cloudProcess.dimension_drafts).length ? cloudProcess.dimension_drafts : localInspiration?.dimensionDrafts,
+        validationResults: cloudProcess.validation_results || localInspiration?.validationResults,
+        personalizedExpansions: cloudProcess.personalized_expansions || localInspiration?.personalizedExpansions,
+        assembledEssay: cloudProcess.assembled_essay || localInspiration?.assembledEssay,
+      } as InspirationHistoryData : localInspiration;
       const restoredCards = Array.isArray(inspiration?.cards)
         ? inspiration.cards
         : currentTopic === item.topic ? cards : [];
@@ -516,28 +609,86 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       const restoredInputs = inspiration?.userInputs && typeof inspiration.userInputs === 'object'
         ? { ...inspiration.userInputs }
         : {};
+      const restoredDrafts: Record<string, DimensionDraft> = inspiration?.dimensionDrafts && typeof inspiration.dimensionDrafts === 'object'
+        ? inspiration.dimensionDrafts
+        : {};
+      const localScaffolds = historyItems
+        .filter(historyItem => historyItem.dataType === 'scaffold' && historyItem.topic === item.topic)
+        .map(historyItem => ({ item: historyItem, data: historyItem.data as ScaffoldContent }));
+      restoredCards.forEach(card => {
+        const localScaffold = localScaffolds
+          .filter(entry => entry.data.selectedDimension.trim().toLowerCase() === card.dimension.trim().toLowerCase())
+          .sort((a, b) => Math.abs(a.item.timestamp - (relatedInspiration?.timestamp || item.timestamp)) - Math.abs(b.item.timestamp - (relatedInspiration?.timestamp || item.timestamp)))[0]?.data;
+        if (localScaffold && !restoredInputs[card.id]) restoredInputs[card.id] = localScaffold.userIdea || '';
+      });
+      const restoredValidations = inspiration?.validationResults && typeof inspiration.validationResults === 'object'
+        ? inspiration.validationResults as Record<string, IdeaValidationResult>
+        : {};
 
       setCurrentTopic(item.topic);
-      setScaffoldData(scaffold);
+      setScaffoldData(restoredDrafts[matchingCard?.id || '']?.scaffoldData || scaffold);
       setWritingMode(scaffold.writingMode || inspiration?.writingMode || 'argumentative');
       setCards(restoredCards);
-      setDimensionDrafts({});
-      setRestoredValidationResults({});
-      thinkingProcessIdRef.current = null;
+      setDimensionDrafts(restoredDrafts);
+      setRestoredValidationResults(restoredValidations);
+      validationResultsRef.current = restoredValidations;
+      coachingTurnsRef.current = Object.fromEntries(Object.entries(restoredValidations).map(([id, result]) => [id, result.conversation || []]));
+      setPersonalizedExpansions(inspiration?.personalizedExpansions || {});
+      setAssembledEssay(inspiration?.assembledEssay || null);
+      thinkingProcessIdRef.current = cloudProcess?.id || null;
+      localThinkingHistoryIdRef.current = relatedInspiration?.id || null;
       if (matchingCard && !restoredInputs[matchingCard.id]) {
         restoredInputs[matchingCard.id] = scaffold.userIdea || '';
       }
       setStep1Inputs(restoredInputs);
       setActiveCard(matchingCard);
-      currentDraftRef.current = '';
+      currentDraftRef.current = restoredDrafts[matchingCard?.id || '']?.draft || '';
       setFlowState('showing_result');
       setIsHistoryOpen(false);
     } else if (item.dataType === 'inspiration') {
-      const data = item.data as Partial<InspirationHistoryData>;
+      const localData = item.data as Partial<InspirationHistoryData>;
+      const cloudProcess = await findRelatedThinkingProcess(item);
+      const data: Partial<InspirationHistoryData> = cloudProcess ? {
+        cards: Array.isArray(cloudProcess.inspiration_cards) ? cloudProcess.inspiration_cards : localData.cards,
+        userInputs: cloudProcess.user_ideas || localData.userInputs,
+        writingMode: cloudProcess.writing_mode || localData.writingMode,
+        dimensionDrafts: cloudProcess.dimension_drafts && Object.keys(cloudProcess.dimension_drafts).length ? cloudProcess.dimension_drafts : localData.dimensionDrafts,
+        validationResults: cloudProcess.validation_results || localData.validationResults,
+        personalizedExpansions: cloudProcess.personalized_expansions || localData.personalizedExpansions,
+        assembledEssay: cloudProcess.assembled_essay || localData.assembledEssay,
+      } : localData;
+      const restoredCards = Array.isArray(data.cards) ? data.cards : [];
+      const restoredInputs = data.userInputs && typeof data.userInputs === 'object' ? { ...data.userInputs } : {};
+      const restoredDrafts: Record<string, DimensionDraft> = data.dimensionDrafts && typeof data.dimensionDrafts === 'object'
+        ? { ...data.dimensionDrafts }
+        : {};
+      const localScaffolds = historyItems
+        .filter(historyItem => historyItem.dataType === 'scaffold' && historyItem.topic === item.topic)
+        .map(historyItem => ({ item: historyItem, data: historyItem.data as ScaffoldContent }));
+      restoredCards.forEach(card => {
+        const localScaffold = localScaffolds
+          .filter(entry => entry.data.selectedDimension.trim().toLowerCase() === card.dimension.trim().toLowerCase())
+          .sort((a, b) => Math.abs(a.item.timestamp - item.timestamp) - Math.abs(b.item.timestamp - item.timestamp))[0]?.data;
+        if (localScaffold && !restoredInputs[card.id]) restoredInputs[card.id] = localScaffold.userIdea || '';
+      });
       setCurrentTopic(item.topic);
       setWritingMode(data.writingMode || 'argumentative');
-      setCards(Array.isArray(data.cards) ? data.cards : []);
-      setStep1Inputs(data.userInputs && typeof data.userInputs === 'object' ? data.userInputs : {});
+      setCards(restoredCards);
+      setStep1Inputs(restoredInputs);
+      setDimensionDrafts(restoredDrafts);
+      const validations = data.validationResults && typeof data.validationResults === 'object'
+        ? data.validationResults as Record<string, IdeaValidationResult>
+        : {};
+      setRestoredValidationResults(validations);
+      validationResultsRef.current = validations;
+      coachingTurnsRef.current = Object.fromEntries(Object.entries(validations).map(([id, result]) => [id, result.conversation || []]));
+      setPersonalizedExpansions(data.personalizedExpansions || {});
+      setAssembledEssay(data.assembledEssay || null);
+      setScaffoldData(null);
+      setActiveCard(null);
+      currentDraftRef.current = '';
+      thinkingProcessIdRef.current = cloudProcess?.id || null;
+      localThinkingHistoryIdRef.current = item.id;
       setFlowState('selecting_card');
       setIsHistoryOpen(false);
     }
@@ -607,7 +758,12 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
               </div>
             </div>
           )}
-          <InputSection onSubmit={handleTopicSubmit} isLoading={false} />
+          <InputSection
+            onSubmit={handleTopicSubmit}
+            isLoading={false}
+            writingMode={writingMode}
+            onWritingModeChange={setWritingMode}
+          />
         </>
       )}
 
@@ -664,7 +820,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
               <h2 className="text-3xl font-serif font-bold text-slate-800 mb-2">
                 <UiIcon name="essay" className="mr-2 inline-block align-[-3px] text-emerald-700" /><span className="text-emerald-700">{writingMode === 'narrative' ? '整理完整故事' : '组合成文'}</span>
               </h2>
-              <p className="text-slate-500">{writingMode === 'narrative' ? '展开故事路线图，完成后可一键发送到叙事写作批改' : '写好引言和结论，完成后可一键发送到作文批改'}</p>
+              <p className="text-slate-500">{writingMode === 'narrative' ? '按事件顺序整理场景、行动与结果，完成后可一键发送到叙事写作批改' : '写好引言和结论，完成后可一键发送到作文批改'}</p>
               <div className="mt-3 bg-white border border-slate-200 rounded-lg p-3 shadow-sm inline-flex items-center gap-3">
                 <span className="bg-brand-50 text-brand-700 text-[10px] font-bold px-2 py-1 rounded border border-brand-100 uppercase tracking-wider whitespace-nowrap">
                   Topic
@@ -676,8 +832,8 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
             {/* Essay Sections */}
             <div className="bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden">
 
-              {/* === Introduction === */}
-              <div className="border-b border-slate-100">
+              {/* Argumentative writing uses separate introduction and conclusion sections. */}
+              {writingMode !== 'narrative' && <div className="border-b border-slate-100">
                 <div className="bg-blue-50 px-6 py-3 border-b border-blue-200">
                   <div className="flex items-center gap-2">
                     <span className="text-blue-700 text-sm">🏁</span>
@@ -727,7 +883,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                     </div>
                   )}
                 </div>
-              </div>
+              </div>}
 
               {/* === Body Paragraphs === */}
               {assembledEssay.bodyParagraphs.map((para, i) => (
@@ -736,7 +892,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                     <div className="flex items-center gap-2">
                       <span className="text-slate-600 text-sm">📖</span>
                       <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                        {writingMode === 'narrative' ? `事件发展 ${i + 1} — ${para.dimension}` : `正文段落 ${i + 1} — ${para.dimension}`}
+                        {writingMode === 'narrative' ? `故事环节 ${i + 1} — ${para.dimension}` : `正文段落 ${i + 1} — ${para.dimension}`}
                       </span>
                       <span className="text-[10px] text-slate-500 ml-auto">你的原创段落</span>
                     </div>
@@ -758,8 +914,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                 </div>
               ))}
 
-              {/* === Conclusion === */}
-              <div>
+              {writingMode !== 'narrative' && <div>
                 <div className="bg-blue-50 px-6 py-3 border-b border-blue-200">
                   <div className="flex items-center gap-2">
                     <span className="text-blue-700 text-sm">🎯</span>
@@ -809,14 +964,16 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                     </div>
                   )}
                 </div>
-              </div>
+              </div>}
             </div>
 
             {/* Word Count & Actions */}
             <div className="flex items-center justify-between bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
               <div className="text-sm text-slate-500">
                 总字数：<span className="font-bold text-slate-800">
-                  {[assembledEssay.introduction, ...assembledEssay.bodyParagraphs.map(p => p.draft), assembledEssay.conclusion]
+                  {(writingMode === 'narrative'
+                    ? assembledEssay.bodyParagraphs.map(p => p.draft)
+                    : [assembledEssay.introduction, ...assembledEssay.bodyParagraphs.map(p => p.draft), assembledEssay.conclusion])
                     .join(' ').split(/\s+/).filter(w => w).length}
                 </span> words
               </div>
