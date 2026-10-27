@@ -3,9 +3,11 @@ import { getAllLearningStats, LearningStats, getHistory, getAggregatedUserErrors
 import { HistoryItem, ScaffoldContent, EssayHistoryData, AggregatedError, CritiqueCategory, EssayGradeResult, Tab } from '../types';
 import ResultsDisplay from '../components/ResultsDisplay';
 import GradingReport from '../components/GradingReport';
-import { getThinkingProcessByUser, getEssayGradesByUser, getVocabularyBank, deleteVocabBankEntry, VocabBankEntry, upsertVocabularyBank, getCollocationBank, deleteCollocationBankEntry, CollocationBankEntry, upsertCollocationBank } from '../services/supabaseDataService';
+import { getThinkingProcessByUser, getEssayGradesByUser, getVocabularyBank, deleteVocabBankEntry, VocabBankEntry, upsertVocabularyBank, getCollocationBank, deleteCollocationBankEntry, CollocationBankEntry, upsertCollocationBank, saveArgumentativeCtrlScoreV2 } from '../services/supabaseDataService';
+import { analyzeArgumentativeCtrlScoreV2 } from '../services/geminiService';
 import { computeMilestones } from '../services/milestones';
 import UiIcon, { type UiIconName } from '../components/UiIcon';
+import { ARGUMENTATIVE_CTRL_DIMS, isArgumentativeProcess, type ArgumentativeCtrlV2 } from '../services/argumentativeCtrlRubric';
 
 /** 学习中心展示用：与 Supabase ctrl_score JSON 对齐的宽松类型（避免依赖 LLM 运行时模块） */
 interface CtrlScoreStudentView {
@@ -25,11 +27,14 @@ interface CtrlScoreStudentView {
 }
 
 interface CtrlHistoryEntry {
+  processId: string;
   score: number;
   topic: string;
   date: string;
   detail: CtrlScoreStudentView | null;
   writingMode: 'argumentative' | 'narrative';
+  rubricVersion: string;
+  v2?: ArgumentativeCtrlV2;
 }
 
 const CTRL_DIMS_STUDENT: readonly {
@@ -494,6 +499,15 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
   const [showAllHistory, setShowAllHistory] = useState(false);
   const [activeVaultTab, setActiveVaultTab] = useState<'vocabulary' | 'collocations'>('vocabulary');
   const [ctrlHistory, setCtrlHistory] = useState<CtrlHistoryEntry[]>([]);
+  const [unscoredArguments, setUnscoredArguments] = useState<any[]>([]);
+  const [partialArguments, setPartialArguments] = useState<any[]>([]);
+  const [retryingArgumentId, setRetryingArgumentId] = useState<string | null>(null);
+  const [argumentRetryError, setArgumentRetryError] = useState('');
+  const [ctrlTrack, setCtrlTrack] = useState('');
+  const ctrlTrackOptions = useMemo(() => Array.from(new Set(ctrlHistory.map(entry => `${entry.writingMode}:${entry.rubricVersion}`))), [ctrlHistory]);
+  const activeCtrlTrack = ctrlTrackOptions.includes(ctrlTrack) ? ctrlTrack : ctrlTrackOptions[ctrlTrackOptions.length - 1];
+  const selectedCtrlHistory = useMemo(() => ctrlHistory.filter(entry => `${entry.writingMode}:${entry.rubricVersion}` === activeCtrlTrack), [ctrlHistory, activeCtrlTrack]);
+  const ctrlAnalyzedProcessCount = useMemo(() => new Set(ctrlHistory.map(entry => entry.processId)).size, [ctrlHistory]);
   const [showCtrlDimensions, setShowCtrlDimensions] = useState(false);
   /** 云端作文分数（时间升序），用于本地历史不足 2 条时仍显示「写作成长对比」 */
   const [remoteEssayScores, setRemoteEssayScores] = useState<{ created_at: string; total_score: number }[]>([]);
@@ -578,9 +592,9 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
         graderCount: stats.graderCount,
         drillCount: stats.drillCount,
         essayMaxScore,
-        ctrlAnalyzedCount: ctrlHistory.length,
+        ctrlAnalyzedCount: ctrlAnalyzedProcessCount,
       }),
-    [stats.socraticCount, stats.graderCount, stats.drillCount, essayMaxScore, ctrlHistory.length]
+    [stats.socraticCount, stats.graderCount, stats.drillCount, essayMaxScore, ctrlAnalyzedProcessCount]
   );
 
   // 获取最近的5次作文用于趋势图
@@ -947,26 +961,35 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
           ]).then(([tpRes, essayRes]) => {
             const data = tpRes.data;
             if (data) {
-              const scored: CtrlHistoryEntry[] = data
-                .filter((p: any) => p.ctrl_score?.total != null)
-                .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-                .map((p: any) => {
-                  const cs = p.ctrl_score as CtrlScoreStudentView;
-                  return {
-                    score: cs.total as number,
-                    topic: p.topic || '',
-                    date: cs.analyzedAt || p.created_at,
-                    detail: cs && typeof cs === 'object' ? cs : null,
-                    writingMode: p.writing_mode === 'narrative'
-                      || cs.writingMode === 'narrative'
-                      || (Array.isArray(p.inspiration_cards) && p.inspiration_cards.some((card: any) => !!card?.narrativeRole))
-                      ? 'narrative'
-                      : 'argumentative',
-                  };
+              setUnscoredArguments(data.filter((p: any) => p.status === 'sent_to_grader'
+                && isArgumentativeProcess(p) === true
+                && p.ctrl_score_argumentative_v2?.rubricVersion !== 'argumentative-ct-v2'));
+              setPartialArguments(data.filter((p: any) => isArgumentativeProcess(p) === true
+                && p.ctrl_score_argumentative_v2?.rubricVersion === 'argumentative-ct-v2'
+                && p.ctrl_score_argumentative_v2.total === null));
+              const scored: CtrlHistoryEntry[] = data.flatMap((p: any) => {
+                const cs = p.ctrl_score as CtrlScoreStudentView | null;
+                const v2 = p.ctrl_score_argumentative_v2 as ArgumentativeCtrlV2 | null;
+                const mode = p.writing_mode === 'narrative' || cs?.writingMode === 'narrative'
+                  || (Array.isArray(p.inspiration_cards) && p.inspiration_cards.some((card: any) => !!card?.narrativeRole))
+                  ? 'narrative' : 'argumentative';
+                const entries: CtrlHistoryEntry[] = [];
+                if (typeof cs?.total === 'number') entries.push({
+                  processId: p.id, score: cs.total, topic: p.topic || '', date: p.created_at,
+                  detail: cs, writingMode: mode,
+                  rubricVersion: cs.rubricVersion || (mode === 'narrative' ? 'narrative-legacy' : 'argumentative-legacy'),
                 });
+                if (mode === 'argumentative' && v2?.rubricVersion === 'argumentative-ct-v2' && typeof v2.total === 'number') entries.push({
+                  processId: p.id, score: v2.total, topic: p.topic || '', date: p.created_at,
+                  detail: null, writingMode: 'argumentative', rubricVersion: v2.rubricVersion, v2,
+                });
+                return entries;
+              }).sort((a: CtrlHistoryEntry, b: CtrlHistoryEntry) => new Date(a.date).getTime() - new Date(b.date).getTime());
               setCtrlHistory(scored);
             } else {
               setCtrlHistory([]);
+              setUnscoredArguments([]);
+              setPartialArguments([]);
             }
             const rows = essayRes.data || [];
             const sorted = [...rows]
@@ -977,6 +1000,8 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
             );
           }).catch(() => {
             setCtrlHistory([]);
+            setUnscoredArguments([]);
+            setPartialArguments([]);
             setRemoteEssayScores([]);
           });
         } else {
@@ -1038,6 +1063,32 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
       case 'essay_grade': return { label: '✍️ 作文批改', style: 'bg-indigo-50 text-indigo-700 border-indigo-200' };
       case 'drill': return { label: '🏋️ 句子特训', style: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
       default: return { label: '📝 记录', style: 'bg-slate-50 text-slate-600 border-slate-200' };
+    }
+  };
+
+  const retryArgumentScore = async (process: any) => {
+    setRetryingArgumentId(process.id);
+    setArgumentRetryError('');
+    try {
+      const result = await analyzeArgumentativeCtrlScoreV2({
+        topic: process.topic || '', inspirationCards: process.inspiration_cards || [],
+        userIdeas: process.user_ideas || {}, validationResults: process.validation_results || {},
+        dimensionDrafts: process.dimension_drafts || {}, assembledEssay: process.assembled_essay || null,
+        argumentReflection: process.argument_reflection || null,
+      });
+      const { error } = await saveArgumentativeCtrlScoreV2(process.id, result);
+      if (error) throw error;
+      setUnscoredArguments(previous => previous.filter(item => item.id !== process.id));
+      if (result.total === null) setPartialArguments(previous => [{ ...process, ctrl_score_argumentative_v2: result }, ...previous.filter(item => item.id !== process.id)]);
+      if (typeof result.total === 'number') setCtrlHistory(previous => [...previous, {
+        processId: process.id, score: result.total as number, topic: process.topic || '', date: process.created_at || result.analyzedAt,
+        detail: null, writingMode: 'argumentative' as const, rubricVersion: result.rubricVersion, v2: result,
+      }].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()));
+      else setArgumentRetryError('分析已保存，但有维度缺少学生过程证据，暂不计算总分。教师端可查看详细原因。');
+    } catch (error) {
+      setArgumentRetryError(error instanceof Error ? error.message : '分析失败，请稍后重试。');
+    } finally {
+      setRetryingArgumentId(null);
     }
   };
 
@@ -1179,7 +1230,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
           </div>
 
           {/* 2.5 成长对比 + 审辨信度趋势 */}
-          {(writingGrowthComparison != null || ctrlHistory.length >= 1) && (
+          {(writingGrowthComparison != null || ctrlHistory.length >= 1 || unscoredArguments.length > 0 || partialArguments.length > 0) && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
 
               {/* 首次 vs 最新对比卡（本地历史 ≥2 或云端 ≥2 条作文批改） */}
@@ -1209,7 +1260,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
               })()}
 
               {/* CTRL 审辨信度趋势 / 评分卡 */}
-              {ctrlHistory.length >= 1 && (
+              {(ctrlHistory.length >= 1 || unscoredArguments.length > 0 || partialArguments.length > 0) && (
                 <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
                   <div className="flex items-center gap-2 mb-4">
                     <div className="w-8 h-8 rounded-lg bg-purple-100 text-purple-800 flex items-center justify-center text-lg">🔍</div>
@@ -1218,18 +1269,37 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                       <p className="text-[10px] text-slate-400 uppercase tracking-wider">CTRL Score Trend (Max 10)</p>
                     </div>
                   </div>
-                  {ctrlHistory.length === 1 ? (
+                  {unscoredArguments.length > 0 && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                    <p>有 {unscoredArguments.length} 篇已提交议论文尚无新版审辨信度。作文批改不受影响。</p>
+                    {unscoredArguments.slice(0, 3).map(process => <div key={process.id} className="mt-2 flex items-center justify-between gap-2">
+                      <span className="truncate">{process.topic || '未命名题目'}</span>
+                      <button type="button" disabled={retryingArgumentId !== null} onClick={() => retryArgumentScore(process)} className="shrink-0 rounded border border-amber-300 bg-white px-2 py-1 disabled:opacity-50">{retryingArgumentId === process.id ? '分析中…' : '重新分析'}</button>
+                    </div>)}
+                  </div>}
+                  {partialArguments.map(process => {
+                    const score = process.ctrl_score_argumentative_v2 as ArgumentativeCtrlV2;
+                    return <details key={process.id} className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                      <summary className="cursor-pointer font-bold">{process.topic || '未命名题目'} · 议论文新版评价：过程证据不足</summary>
+                      <div className="mt-2 space-y-2">{ARGUMENTATIVE_CTRL_DIMS.map(dim => <p key={dim.key}>{dim.label}：{typeof score.dimensions?.[dim.key]?.score === 'number' ? `${score.dimensions[dim.key].score?.toFixed(1)} 分` : '证据不足'}。{score.dimensions?.[dim.key]?.explanation}</p>)}</div>
+                    </details>;
+                  })}
+                  {argumentRetryError && <p role="alert" className="mb-3 text-xs text-rose-700">{argumentRetryError}</p>}
+                  {selectedCtrlHistory.length > 0 && <>
+                  <select aria-label="审辨信度文体与量规" value={activeCtrlTrack || ''} onChange={event => { setCtrlTrack(event.target.value); setShowCtrlDimensions(false); }} className="mb-3 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700">
+                    {ctrlTrackOptions.map(key => <option key={key} value={key}>{key.startsWith('narrative:') ? '记叙文' : '议论文'} · {key.endsWith('legacy') ? '旧版量规' : key.endsWith('argumentative-ct-v2') ? '三项思维能力' : '当前量规'}</option>)}
+                  </select>
+                  {selectedCtrlHistory.length === 1 ? (
                     /* 仅1次：只显示评分卡 */
                     <div className="flex flex-col items-center justify-center h-24 gap-2">
-                      <div className="text-4xl font-bold font-serif text-purple-600">{ctrlHistory[0].score.toFixed(1)}</div>
-                      <div className="text-xs text-slate-400">/ 10 · {ctrlHistory[0].writingMode === 'narrative' ? '记叙文 · ' : '议论文 · '}{ctrlHistory[0].topic.slice(0, 20)}{ctrlHistory[0].topic.length > 20 ? '…' : ''}</div>
+                      <div className="text-4xl font-bold font-serif text-purple-600">{selectedCtrlHistory[0].score.toFixed(1)}</div>
+                      <div className="text-xs text-slate-400">/ 10 · {selectedCtrlHistory[0].writingMode === 'narrative' ? '记叙文 · ' : '议论文 · '}{selectedCtrlHistory[0].topic.slice(0, 20)}{selectedCtrlHistory[0].topic.length > 20 ? '…' : ''}</div>
                       <div className="text-[10px] text-slate-300">完成更多审辨写作训练后将显示成长趋势</div>
                     </div>
                   ) : (
                     /* ≥2次：显示趋势图 */
                     <>
                       <div className="flex items-end gap-1.5 h-20">
-                        {ctrlHistory.slice(-6).map((item, i, arr) => {
+                        {selectedCtrlHistory.slice(-6).map((item, i, arr) => {
                           const pct = (item.score / 10) * 100;
                           const isLatest = i === arr.length - 1;
                           return (
@@ -1251,8 +1321,8 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                         <span className="text-[10px] text-slate-400">最近</span>
                       </div>
                       {(() => {
-                        const first = ctrlHistory[0].score;
-                        const latest = ctrlHistory[ctrlHistory.length - 1].score;
+                        const first = selectedCtrlHistory[0].score;
+                        const latest = selectedCtrlHistory[selectedCtrlHistory.length - 1].score;
                         const d = +(latest - first).toFixed(1);
                         return (
                           <p className={`text-xs font-bold mt-2 text-center ${d > 0 ? 'text-purple-600' : d < 0 ? 'text-rose-500' : 'text-slate-500'}`}>
@@ -1265,8 +1335,8 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
 
                   {/* 总体评语：学生端直接可见（基于最近一次已分析的训練） */}
                   {(() => {
-                    const latest = ctrlHistory[ctrlHistory.length - 1];
-                    const comment = latest?.detail?.overallComment?.trim();
+                    const latest = selectedCtrlHistory[selectedCtrlHistory.length - 1];
+                    const comment = (latest?.v2?.overallComment || latest?.detail?.overallComment)?.trim();
                     if (!comment) return null;
                     return (
                       <div className="mt-4 pt-3 border-t border-slate-100">
@@ -1278,9 +1348,9 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
 
                   {/* 四维明细：折叠展开，对齐教师端维度权重与配色 */}
                   {(() => {
-                    const latest = ctrlHistory[ctrlHistory.length - 1];
+                    const latest = selectedCtrlHistory[selectedCtrlHistory.length - 1];
                     const d = latest?.detail;
-                    if (!d) return null;
+                    if (!d && !latest?.v2) return null;
                     return (
                       <div className="mt-3">
                         <button
@@ -1288,7 +1358,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                           onClick={() => setShowCtrlDimensions(!showCtrlDimensions)}
                           className="w-full flex items-center justify-between px-3 py-2 bg-purple-50/80 hover:bg-purple-50 border border-purple-100 rounded-lg transition-colors text-xs font-bold text-purple-800"
                         >
-                          <span>📊 {showCtrlDimensions ? '收起' : '展开'}{latest.writingMode === 'narrative' ? latest.detail?.rubricVersion === 'narrative-ct-v2' ? '记叙文三项思维能力与要点' : '记叙文旧版评分维度与要点' : '四维得分与要点'}</span>
+                          <span>📊 {showCtrlDimensions ? '收起' : '展开'}{latest.v2 ? '议论文三项思维能力与依据' : latest.writingMode === 'narrative' ? latest.detail?.rubricVersion === 'narrative-ct-v2' ? '记叙文三项思维能力与要点' : '记叙文旧版评分维度与要点' : '议论文旧版四维得分与要点'}</span>
                           <span className={`transform transition-transform ${showCtrlDimensions ? 'rotate-180' : ''}`}>▼</span>
                         </button>
                         {showCtrlDimensions && (
@@ -1296,11 +1366,19 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                             <p className="text-[10px] text-slate-400">
                               以下为你最近一次{latest.writingMode === 'narrative' ? '记叙文' : '议论文'}审辨写作训练（{latest.topic?.slice(0, 24)}{latest.topic && latest.topic.length > 24 ? '…' : ''}）的参考反馈；各维度满分 10 分。
                             </p>
-                            {(latest.writingMode === 'narrative'
+                            {latest.v2 ? ARGUMENTATIVE_CTRL_DIMS.map(dim => {
+                              const result = latest.v2!.dimensions[dim.key];
+                              return <div key={dim.key} className="border-b border-slate-200 pb-2 last:border-0">
+                                <div className="flex justify-between text-xs font-bold text-slate-700"><span>{dim.label}</span><span>{typeof result?.score === 'number' ? result.score.toFixed(1) : '证据不足'}</span></div>
+                                {typeof result?.score === 'number' && <div className="mt-1 h-1.5 rounded-full bg-slate-200"><div className="h-full rounded-full" style={{ width: `${result.score * 10}%`, backgroundColor: dim.color }} /></div>}
+                                <p className="mt-1 text-[11px] text-slate-600">{result?.explanation}</p>
+                                {result?.evidence?.map((item, index) => <p key={index} className="mt-1 text-[11px] text-slate-500">你的原文：“{item.quote}”</p>)}
+                              </div>;
+                            }) : (latest.writingMode === 'narrative'
                               ? latest.detail?.rubricVersion === 'narrative-ct-v2' ? CTRL_DIMS_NARRATIVE : CTRL_DIMS_NARRATIVE_LEGACY
                               : CTRL_DIMS_STUDENT).map(({ key, label, weight, color }) => {
-                              const val = typeof d[key] === 'number' ? d[key] as number : 0;
-                              const expl = d.explanations?.[key]?.trim() || '';
+                              const val = typeof d?.[key] === 'number' ? d[key] as number : 0;
+                              const expl = d?.explanations?.[key]?.trim() || '';
                               return (
                                 <div key={key}>
                                   <div className="flex items-center justify-between mb-1">
@@ -1331,6 +1409,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                       </div>
                     );
                   })()}
+                  </>}
                 </div>
               )}
             </div>

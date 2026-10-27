@@ -20,6 +20,7 @@ import {
   InspirationCard,
   WritingMode,
 } from '../types'
+import { isArgumentativeProcess, type ArgumentativeCtrlV2, type ArgumentReflection } from './argumentativeCtrlRubric'
 
 // ==========================================
 // 1. 用户管理（quickSignIn 模式）
@@ -188,11 +189,76 @@ export const quickSignInExternal = async (
  * 批量审辨信度：查询指定班级中已有组合成文的思维过程记录
  * @param includeExistingCtrl 为 true 时包含已有 ctrl_score 的记录（用于量规更新后按新标准重算）
  */
+export interface BatchWritingScope {
+  topic: string
+  topicVariants?: string[]
+  fromDate?: string
+  toDate?: string
+}
+
+const applyBatchWritingScope = (query: any, scope: BatchWritingScope) => {
+  query = query.in('topic', scope.topicVariants?.length ? scope.topicVariants : [scope.topic])
+  if (scope.fromDate) query = query.gte('created_at', new Date(`${scope.fromDate}T00:00:00`).toISOString())
+  if (scope.toDate) {
+    const nextDay = new Date(`${scope.toDate}T00:00:00`)
+    nextDay.setDate(nextDay.getDate() + 1)
+    query = query.lt('created_at', nextDay.toISOString())
+  }
+  return query
+}
+
+/** 列出班级内有成文记录的题目；议论文仅显示已经送批改的写作。 */
+export const getBatchWritingTopics = async (className: string, mode: 'narrative' | 'argumentative') => {
+  const { data: students, error: studentError } = await supabase
+    .from('wc_users')
+    .select('id')
+    .eq('class_name', className)
+    .in('role', ['student', 'external_student'])
+  if (studentError || !students?.length) return { data: [] as Array<{ topic: string; count: number; variants: string[]; batches: Array<{ key: string; label: string; count: number }> }>, error: studentError }
+
+  const studentIds = students.map(student => student.id)
+  const normalizeTopic = (value: string) => value.normalize('NFKC').replace(/[“”‘’]/g, "'").replace(/\s+/g, ' ').replace(/\s*([,:;!?。！？])\s*/g, '$1').replace(/[.!?。！？]+$/, '').trim().toLocaleLowerCase()
+  const grouped = new Map<string, { topic: string; count: number; variants: Map<string, number>; batches: Map<string, number> }>()
+  for (let offset = 0; ; offset += 500) {
+    let query = supabase
+      .from('wc_thinking_process')
+      .select('topic, writing_mode, inspiration_cards, created_at')
+      .in('user_id', studentIds)
+      .not('assembled_essay', 'is', null)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + 499)
+    if (mode === 'argumentative') query = query.eq('status', 'sent_to_grader')
+    const { data: page, error } = await query
+    if (error) return { data: [] as Array<{ topic: string; count: number; variants: string[]; batches: Array<{ key: string; label: string; count: number }> }>, error }
+    for (const process of page || []) {
+      if (isArgumentativeProcess(process) !== (mode === 'argumentative')) continue
+      if (!process.topic?.trim()) continue
+      const original = process.topic.trim()
+      const entry = grouped.get(normalizeTopic(original)) || { topic: original, count: 0, variants: new Map(), batches: new Map() }
+      entry.count += 1
+      entry.variants.set(original, (entry.variants.get(original) || 0) + 1)
+      const batchKey = typeof process.created_at === 'string' ? process.created_at.slice(0, 10) : '未标注日期'
+      entry.batches.set(batchKey, (entry.batches.get(batchKey) || 0) + 1)
+      if ((entry.variants.get(original) || 0) > (entry.variants.get(entry.topic) || 0)) entry.topic = original
+      grouped.set(normalizeTopic(original), entry)
+    }
+    if (!page || page.length < 500) break
+  }
+  const data = [...grouped.values()].map(entry => ({
+    topic: entry.topic,
+    count: entry.count,
+    variants: [...entry.variants.keys()],
+    batches: [...entry.batches.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([key, count]) => ({ key, label: key === '未标注日期' ? key : `${key}（${count} 篇）`, count })),
+  })).sort((a, b) => b.count - a.count || a.topic.localeCompare(b.topic, 'zh-CN'))
+  return { data, error: null }
+}
+
 export const getBatchCtrlCandidates = async (
   className: string,
-  options?: { includeExistingCtrl?: boolean }
+  options: { scope: BatchWritingScope; includeExistingCtrl?: boolean; narrativeOnly?: boolean }
 ) => {
   try {
+    if (!options.scope.topic.trim()) return { data: [], error: new Error('请先选择写作题目') }
     const includeExistingCtrl = options?.includeExistingCtrl === true
     // Step 1: 获取该班所有学生 ID
     const { data: students, error: stuError } = await supabase
@@ -209,26 +275,24 @@ export const getBatchCtrlCandidates = async (
     const studentMap: Record<string, any> = {}
     students.forEach((s: any) => { studentMap[s.id] = s })
 
-    // Step 2: 有 assembled_essay；默认仅尚无 ctrl_score；可选包含已有分数以便重算
-    let procQuery = supabase
-      .from('wc_thinking_process')
-      .select(
-        'id, topic, user_ideas, validation_results, personalized_expansions, dimension_drafts, assembled_essay, inspiration_cards, user_id, ctrl_score'
-      )
-      .in('user_id', studentIds)
-      .not('assembled_essay', 'is', null)
-
-    if (!includeExistingCtrl) {
-      procQuery = procQuery.is('ctrl_score', null)
+    // 每页读取同一题目，避免人数较多时只取得 Supabase 默认的前 1000 条。
+    const processes: any[] = []
+    for (let offset = 0; ; offset += 500) {
+      let procQuery = applyBatchWritingScope(supabase
+        .from('wc_thinking_process')
+        .select('id, topic, writing_mode, user_ideas, validation_results, personalized_expansions, dimension_drafts, assembled_essay, inspiration_cards, user_id, ctrl_score')
+        .in('user_id', studentIds)
+        .not('assembled_essay', 'is', null), options.scope)
+      if (!includeExistingCtrl) procQuery = procQuery.is('ctrl_score', null)
+      const { data: page, error: procError } = await procQuery
+        .order('created_at', { ascending: false })
+        .range(offset, offset + 499)
+      if (procError) return { data: [], error: procError }
+      processes.push(...(page || []))
+      if (!page || page.length < 500) break
     }
 
-    const { data: processes, error: procError } = await procQuery.order('created_at', {
-      ascending: false,
-    })
-
-    if (procError) return { data: [], error: procError }
-
-    const result = (processes || []).map((p: any) => ({
+    const result = processes.filter((p: any) => !options.narrativeOnly || isArgumentativeProcess(p) === false).map((p: any) => ({
       ...p,
       studentName: studentMap[p.user_id]?.name || '未知',
       studentId: studentMap[p.user_id]?.student_id || '',
@@ -238,6 +302,53 @@ export const getBatchCtrlCandidates = async (
   } catch (err) {
     return { data: [], error: err }
   }
+}
+
+/** 仅选已送批改的议论文，供新版三维量规追溯评分。 */
+export const getBatchArgumentativeCtrlV2Candidates = async (
+  className: string,
+  options: { scope: BatchWritingScope; includeExisting?: boolean }
+) => {
+  if (!options.scope.topic.trim()) return { data: [] as any[], excluded: { narrative: 0, unknownMode: 0, emptyEssay: 0 }, error: new Error('请先选择写作题目') }
+  const { data: students, error: studentError } = await supabase
+    .from('wc_users')
+    .select('id, name, student_id')
+    .eq('class_name', className)
+    .in('role', ['student', 'external_student'])
+  if (studentError || !students?.length) return { data: [] as any[], excluded: { narrative: 0, unknownMode: 0, emptyEssay: 0 }, error: studentError }
+
+  const processes: any[] = []
+  for (let offset = 0; ; offset += 500) {
+    const query = applyBatchWritingScope(supabase
+      .from('wc_thinking_process')
+      .select('id, user_id, topic, writing_mode, status, inspiration_cards, user_ideas, validation_results, dimension_drafts, assembled_essay, argument_reflection, ctrl_score, ctrl_score_argumentative_v2')
+      .in('user_id', students.map(student => student.id))
+      .eq('status', 'sent_to_grader'), options.scope)
+    const { data: page, error } = await query
+      .order('created_at', { ascending: false })
+      .range(offset, offset + 499)
+    if (error) return { data: [] as any[], excluded: { narrative: 0, unknownMode: 0, emptyEssay: 0 }, error }
+    processes.push(...(page || []))
+    if (!page || page.length < 500) break
+  }
+
+  const studentMap = new Map(students.map(student => [student.id, student]))
+  const excluded = { narrative: 0, unknownMode: 0, emptyEssay: 0 }
+  const data = processes.filter((process: any) => {
+    const mode = isArgumentativeProcess(process)
+    if (mode === false) { excluded.narrative++; return false }
+    if (mode === null) { excluded.unknownMode++; return false }
+    const essay = process.assembled_essay as { introduction?: string; conclusion?: string; bodyParagraphs?: Array<{ draft?: string }> } | null
+    const text = [essay?.introduction, ...(essay?.bodyParagraphs || []).map(part => part.draft), essay?.conclusion]
+      .filter(part => typeof part === 'string' && part.trim()).join('')
+    if (!text) { excluded.emptyEssay++; return false }
+    return options.includeExisting || !process.ctrl_score_argumentative_v2
+  }).map((process: any) => ({
+    ...process,
+    studentName: studentMap.get(process.user_id)?.name || '未知',
+    studentId: studentMap.get(process.user_id)?.student_id || '',
+  }))
+  return { data, excluded, error: null }
 }
 
 /**
@@ -967,6 +1078,7 @@ export const updateThinkingProcess = async (
     personalized_expansions?: Record<string, string[]>
     dimension_drafts?: Record<string, any>
     assembled_essay?: any
+    argument_reflection?: ArgumentReflection | null
     status?: 'in_progress' | 'completed' | 'sent_to_grader'
   }
 ) => {
@@ -979,9 +1091,24 @@ export const updateThinkingProcess = async (
     if (error) {
       console.error('[Supabase] 更新思维过程记录失败:', error)
     }
+    return { error }
   } catch (err) {
     console.error('[Supabase] 更新思维过程记录异常:', err)
+    return { error: err }
   }
+}
+
+/** 延迟自动保存只允许写入未提交记录，避免覆盖提交快照。 */
+export const updateThinkingProcessDraft = async (
+  processId: string,
+  updates: { assembled_essay?: any; argument_reflection?: ArgumentReflection | null; status?: 'completed' }
+) => {
+  const { error } = await supabase
+    .from('wc_thinking_process')
+    .update(updates)
+    .eq('id', processId)
+    .in('status', ['in_progress', 'completed'])
+  return { error }
 }
 
 /**
@@ -1036,6 +1163,41 @@ export const saveCtrlScore = async (processId: string, ctrlScore: object) => {
     console.error('[Supabase] 保存审辨信度异常:', err)
     return { error: err }
   }
+}
+
+/** 新版议论文分数只写独立字段，保留旧 ctrl_score。 */
+export const saveArgumentativeCtrlScoreV2 = async (processId: string, score: ArgumentativeCtrlV2) => {
+  if (score.rubricVersion !== 'argumentative-ct-v2' || score.writingMode !== 'argumentative') {
+    return { error: new Error('议论文新版评分版本不匹配') }
+  }
+  const { data: process, error: readError } = await supabase
+    .from('wc_thinking_process')
+    .select('writing_mode, inspiration_cards')
+    .eq('id', processId)
+    .maybeSingle()
+  if (readError || !process || isArgumentativeProcess(process) !== true) {
+    return { error: readError || new Error('未找到可写入的议论文过程记录') }
+  }
+  const { error } = await supabase
+    .from('wc_thinking_process')
+    .update({ ctrl_score_argumentative_v2: score })
+    .eq('id', processId)
+  if (error) console.error('[Supabase] 保存议论文新版审辨信度失败:', error)
+  return { error }
+}
+
+export const markArgumentativeCtrlV2Reviewed = async (processId: string) => {
+  const { data, error: readError } = await supabase
+    .from('wc_thinking_process')
+    .select('ctrl_score_argumentative_v2')
+    .eq('id', processId)
+    .maybeSingle()
+  if (readError || !data?.ctrl_score_argumentative_v2) return { error: readError || new Error('暂无议论文新版评分') }
+  const { error } = await supabase
+    .from('wc_thinking_process')
+    .update({ ctrl_score_argumentative_v2: { ...data.ctrl_score_argumentative_v2, reviewed: true } })
+    .eq('id', processId)
+  return { error }
 }
 
 // ==========================================

@@ -3,9 +3,13 @@ import { User } from '../types';
 import {
     getAllStudents, getAllEssayGrades, getAllDrillHistory,
     getAllScaffoldHistory, getAgentUsageSummary, getAllThinkingProcesses,
-    updateStudentClass, getExternalUsers, getBatchCtrlCandidates, saveCtrlScore, getActiveRosterClassLabels,
+    updateStudentClass, getExternalUsers, getBatchCtrlCandidates, getBatchWritingTopics, saveCtrlScore, getActiveRosterClassLabels,
 } from '../services/supabaseDataService';
 import { analyzeCtrlScore, CtrlScore } from '../services/geminiService';
+import type { ArgumentativeCtrlV2 } from '../services/argumentativeCtrlRubric';
+import { isArgumentativeProcess } from '../services/argumentativeCtrlRubric';
+import BatchArgumentativeCtrlV2Modal from '../components/BatchArgumentativeCtrlV2Modal';
+import BatchTopicPicker, { type BatchTopicOption } from '../components/BatchTopicPicker';
 
 /** 本校固定班顺序 + 数据库已有 class_name（含外校虚拟班等），去重排序 */
 function mergeTeacherClassOptions(predefined: string[], allUsers: any[]): string[] {
@@ -34,8 +38,16 @@ const BatchCtrlModal: React.FC<{
     classOptions: string[];
 }> = ({ onClose, onCtrlSaved, classOptions }) => {
     const [selectedClass, setSelectedClass] = useState('');
+    const [selectedTopic, setSelectedTopic] = useState('');
+    const [topics, setTopics] = useState<BatchTopicOption[]>([]);
+    const [selectedBatch, setSelectedBatch] = useState('');
+    const [loadingTopics, setLoadingTopics] = useState(false);
+    const [fromDate, setFromDate] = useState('');
+    const [toDate, setToDate] = useState('');
+    const [candidateError, setCandidateError] = useState('');
     const [includeReanalyze, setIncludeReanalyze] = useState(false);
     const [candidates, setCandidates] = useState<any[]>([]);
+    const [loadedScopeKey, setLoadedScopeKey] = useState('');
     const [loadingCandidates, setLoadingCandidates] = useState(false);
     const [running, setRunning] = useState(false);
     const [progress, setProgress] = useState(0);
@@ -45,29 +57,62 @@ const BatchCtrlModal: React.FC<{
     const abortRef = useState({ cancelled: false })[0];
 
     useEffect(() => {
-        if (!selectedClass) {
-            setCandidates([]);
+        if (!selectedClass) { setTopics([]); return; }
+        let cancelled = false;
+        setLoadingTopics(true);
+        getBatchWritingTopics(selectedClass, 'narrative').then(({ data, error }) => {
+            if (!cancelled) {
+                setTopics(data);
+                setCandidateError(error ? '读取该班写作题目失败，请重试。' : '');
+            }
+        }).catch(() => { if (!cancelled) setCandidateError('读取该班写作题目失败，请重试。'); })
+            .finally(() => { if (!cancelled) setLoadingTopics(false); });
+        return () => { cancelled = true; };
+    }, [selectedClass]);
+
+    const invalidDateRange = !!fromDate && !!toDate && fromDate > toDate;
+    const scopeKey = JSON.stringify([selectedClass, selectedTopic, fromDate, toDate, includeReanalyze]);
+    useEffect(() => {
+        setCandidates([]);
+        setLoadedScopeKey('');
+        setFinished(false);
+        if (!selectedClass || !selectedTopic || invalidDateRange) {
+            setLoadingCandidates(false);
             return;
         }
         let cancelled = false;
         setLoadingCandidates(true);
-        getBatchCtrlCandidates(selectedClass, { includeExistingCtrl: includeReanalyze }).then(({ data }) => {
+        setCandidateError('');
+        getBatchCtrlCandidates(selectedClass, {
+            includeExistingCtrl: includeReanalyze, narrativeOnly: true,
+            scope: { topic: selectedTopic, topicVariants: topics.find(item => item.topic === selectedTopic)?.variants, fromDate, toDate },
+        }).then(({ data, error }) => {
             if (!cancelled) {
                 setCandidates(data || []);
+                setLoadedScopeKey(scopeKey);
+                setCandidateError(error ? '读取待评分记录失败，请重试。' : '');
                 setLoadingCandidates(false);
             }
+        }).catch(() => {
+            if (!cancelled) { setCandidateError('读取待评分记录失败，请重试。'); setLoadingCandidates(false); }
         });
         return () => { cancelled = true; };
-    }, [selectedClass, includeReanalyze]);
+    }, [selectedClass, selectedTopic, fromDate, toDate, invalidDateRange, includeReanalyze]);
 
     const handleSelectClass = (cls: string) => {
         setSelectedClass(cls);
+        setSelectedTopic('');
+        setSelectedBatch('');
+        setTopics([]);
+        setCandidates([]);
+        setFromDate('');
+        setToDate('');
         setFinished(false);
         setProgress(0);
     };
 
     const handleStart = async () => {
-        if (candidates.length === 0) return;
+        if (!selectedClass || !selectedTopic || invalidDateRange || loadingCandidates || loadedScopeKey !== scopeKey || candidates.length === 0) return;
         setRunning(true);
         setProgress(0);
         setDone(0);
@@ -86,10 +131,7 @@ const BatchCtrlModal: React.FC<{
                     personalizedExpansions: rec.personalized_expansions || {},
                     dimensionDrafts: rec.dimension_drafts || {},
                     assembledEssay: rec.assembled_essay,
-                    writingMode: rec.writing_mode === 'narrative'
-                        || (Array.isArray(rec.inspiration_cards) && rec.inspiration_cards.some((card: any) => !!card?.narrativeRole))
-                        ? 'narrative'
-                        : 'argumentative',
+                    writingMode: 'narrative',
                 });
                 const prev = rec.ctrl_score as { source?: string; reviewed?: boolean } | null | undefined;
                 const payload = {
@@ -98,7 +140,8 @@ const BatchCtrlModal: React.FC<{
                     reviewed: prev?.reviewed === true,
                 };
                 const { error: saveErr } = await saveCtrlScore(rec.id, payload);
-                if (!saveErr) onCtrlSaved?.(rec.id, payload);
+                if (saveErr) throw saveErr;
+                onCtrlSaved?.(rec.id, payload);
                 setDone(d => d + 1);
             } catch {
                 setFailed(f => f + 1);
@@ -117,12 +160,13 @@ const BatchCtrlModal: React.FC<{
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35">
-            <div className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-md mx-4 overflow-hidden">
+            <div className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
                 <div className="px-6 py-4 flex items-center justify-between border-b border-slate-200 bg-slate-50/60">
                     <div>
-                        <h2 className="font-bold text-lg text-slate-800">批量生成历史审辨信度</h2>
-                        <p className="text-slate-500 text-xs mt-0.5">支持仅补缺，或按新量规覆盖重算已有分数</p>
+                        <h2 className="font-bold text-lg text-slate-800">记叙文批量审辨信度</h2>
+                        <p className="text-slate-500 text-xs mt-0.5">仅处理记叙文；已有分数默认保留</p>
                     </div>
+
                     <button onClick={onClose} disabled={running} className="text-slate-400 hover:text-slate-700 text-xl disabled:opacity-30">✕</button>
                 </div>
 
@@ -142,6 +186,27 @@ const BatchCtrlModal: React.FC<{
                         </div>
                     </div>
 
+                    <div className="space-y-2">
+                        <label className="block text-sm font-bold text-slate-600">选择写作题目</label>
+                        <BatchTopicPicker topics={topics} value={selectedTopic}
+                            onChange={(topic) => { setSelectedTopic(topic); setSelectedBatch(''); setFromDate(''); setToDate(''); setFinished(false); setProgress(0); }}
+                            disabled={!selectedClass || loadingTopics || running} />
+                        {selectedClass && !loadingTopics && topics.length === 0 && !candidateError && <p className="text-xs text-slate-500">该班暂无已完成成文的记叙文题目。</p>}
+                        {selectedTopic && <div className="space-y-1">
+                            <p className="text-xs text-slate-500">相同或近似题目已归并；需要指定某一批时请选择批次。</p>
+                            {(topics.find(item => item.topic === selectedTopic)?.batches.length || 0) > 1 && <select value={selectedBatch} onChange={event => { const key = event.target.value; setSelectedBatch(key); setFromDate(key); setToDate(key); }} disabled={running} className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm">
+                                <option value="">全部批次（{topics.find(item => item.topic === selectedTopic)?.count || 0} 篇）</option>
+                                {topics.find(item => item.topic === selectedTopic)?.batches.map(batch => <option key={batch.key} value={batch.key}>{batch.label}</option>)}
+                            </select>}
+                            <p className="text-xs text-slate-500">也可以用日期范围进一步限定。</p>
+                            <div className="grid grid-cols-2 gap-2">
+                                <label className="text-xs text-slate-600">开始日期<input type="date" value={fromDate} onChange={event => setFromDate(event.target.value)} disabled={running} className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-2" /></label>
+                                <label className="text-xs text-slate-600">结束日期<input type="date" value={toDate} onChange={event => setToDate(event.target.value)} disabled={running} className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-2" /></label>
+                            </div>
+                            {invalidDateRange && <p role="alert" className="text-xs text-rose-700">结束日期不能早于开始日期。</p>}
+                        </div>}
+                    </div>
+
                     <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer select-none ${running ? 'opacity-50 pointer-events-none' : 'bg-slate-50 border-slate-200 hover:border-slate-300'}`}>
                         <input
                             type="checkbox"
@@ -157,7 +222,7 @@ const BatchCtrlModal: React.FC<{
                     </label>
 
                     {/* 待分析记录数 */}
-                    {selectedClass && (
+                    {selectedClass && selectedTopic && !invalidDateRange && (
                         <div className={`rounded-xl p-4 border ${loadingCandidates ? 'bg-slate-50 border-slate-200' : candidates.length > 0 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
                             {loadingCandidates ? (
                                 <p className="text-sm text-slate-500 flex items-center gap-2">
@@ -167,20 +232,21 @@ const BatchCtrlModal: React.FC<{
                             ) : candidates.length > 0 ? (
                                 <div className="text-sm font-medium text-amber-800 space-y-1">
                                     <p>
-                                        {selectedClass} 共 <strong>{candidates.length}</strong> 条记录将参与批量分析
+                                        {selectedClass} · {selectedTopic}：共 <strong>{candidates.length}</strong> 条记录将参与批量分析
                                         {includeReanalyze ? '（含已有分数，将重算覆盖）' : '（仅此前未分析）'}
                                     </p>
                                 </div>
                             ) : includeReanalyze ? (
-                                <p className="text-sm font-medium text-slate-600">该班暂无已完成「组合成文」的审辨写作训练记录。</p>
+                                <p className="text-sm font-medium text-slate-600">该题目及所选日期范围内暂无可评分的记叙文记录。</p>
                             ) : (
                                 <div className="text-sm font-medium text-emerald-700 space-y-1">
-                                    <p>{selectedClass} 在「仅补缺」模式下暂无待分析记录（均已有过审辨信度）。</p>
+                                    <p>该题目及所选日期范围内暂无待分析记录（可能均已有审辨信度）。</p>
                                     <p className="text-xs font-normal text-emerald-800/90">若需按新评分标准重算，请勾选上方「包含已有审辨信度」后重新统计。</p>
                                 </div>
                             )}
                         </div>
                     )}
+                    {candidateError && <p role="alert" className="text-xs text-rose-700">{candidateError}</p>}
 
                     {/* 进度条 */}
                     {(running || finished) && (
@@ -205,7 +271,7 @@ const BatchCtrlModal: React.FC<{
                     <div className="flex gap-3 pt-2">
                         {!running && !finished && (
                             <button onClick={handleStart}
-                                disabled={candidates.length === 0 || loadingCandidates}
+                                disabled={!selectedClass || !selectedTopic || invalidDateRange || loadedScopeKey !== scopeKey || candidates.length === 0 || loadingCandidates || !!candidateError}
                                 className="flex-1 py-3 rounded-lg font-bold text-white bg-slate-900 hover:bg-black disabled:opacity-40 disabled:cursor-not-allowed transition-all">
                                 开始批量分析
                             </button>
@@ -366,9 +432,9 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
     };
 
     /** 审辨信度保存成功后同步到本地列表，避免切换学生后仍显示旧 ctrl_score */
-    const handleThinkingProcessCtrlSaved = useCallback((processId: string, ctrlScore: CtrlScore) => {
+    const handleThinkingProcessCtrlSaved = useCallback((processId: string, ctrlScore: CtrlScore | ArgumentativeCtrlV2, field: 'ctrl_score' | 'ctrl_score_argumentative_v2' = 'ctrl_score') => {
         setThinkingProcesses((prev) =>
-            prev.map((t: any) => (t.id === processId ? { ...t, ctrl_score: ctrlScore } : t))
+            prev.map((t: any) => (t.id === processId ? { ...t, [field]: ctrlScore } : t))
         );
     }, []);
 
@@ -408,7 +474,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
         filtered.students.forEach((s: any) => { studentMap[s.id] = s; });
 
         const rows: string[][] = [
-            ['姓名', '学号', '班级', '作文批改次数', '平均分', '最高分', '最低分', '句子特训次数', '审辨写作训练次数', '审辨信度均分'],
+            ['姓名', '学号', '班级', '作文批改次数', '平均分', '最高分', '最低分', '句子特训次数', '审辨写作训练次数', '议论文旧版均分', '议论文新版均分', '记叙文旧版均分', '记叙文新版均分'],
         ];
 
         filtered.students.forEach((s: any) => {
@@ -419,127 +485,77 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
             const avg = scores.length > 0 ? (scores.reduce((a: number, b: number) => a + b, 0) / scores.length).toFixed(1) : '';
             const max = scores.length > 0 ? Math.max(...scores) : '';
             const min = scores.length > 0 ? Math.min(...scores) : '';
-            const ctrlScores = sProcesses.filter((t: any) => t.ctrl_score?.total != null).map((t: any) => t.ctrl_score.total);
-            const ctrlAvg = ctrlScores.length > 0 ? (ctrlScores.reduce((a: number, b: number) => a + b, 0) / ctrlScores.length).toFixed(1) : '';
-            rows.push([s.name, s.student_id, s.class_name || '', String(sEssays.length), String(avg), String(max), String(min), String(sDrills.length), String(sProcesses.length), String(ctrlAvg)]);
+            const mean = (values: number[]) => values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : '';
+            const legacyArgument = sProcesses.filter((t: any) => isArgumentativeProcess(t) === true && typeof t.ctrl_score?.total === 'number').map((t: any) => t.ctrl_score.total as number);
+            const newArgument = sProcesses.filter((t: any) => isArgumentativeProcess(t) === true && typeof t.ctrl_score_argumentative_v2?.total === 'number').map((t: any) => t.ctrl_score_argumentative_v2.total as number);
+            const oldNarrative = sProcesses.filter((t: any) => isArgumentativeProcess(t) === false && t.ctrl_score?.rubricVersion !== 'narrative-ct-v2' && typeof t.ctrl_score?.total === 'number').map((t: any) => t.ctrl_score.total as number);
+            const newNarrative = sProcesses.filter((t: any) => isArgumentativeProcess(t) === false && t.ctrl_score?.rubricVersion === 'narrative-ct-v2' && typeof t.ctrl_score?.total === 'number').map((t: any) => t.ctrl_score.total as number);
+            rows.push([s.name, s.student_id, s.class_name || '', String(sEssays.length), String(avg), String(max), String(min), String(sDrills.length), String(sProcesses.length), mean(legacyArgument), mean(newArgument), mean(oldNarrative), mean(newNarrative)]);
         });
 
         const label = selectedClass === 'all' ? '全部班级' : selectedClass;
         downloadCSV(rows, `学生学习汇总_${label}_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '')}.csv`);
     };
 
-    // 导出②：审辨信度汇总（每个学生一行，多次记录水平展开）
-    const exportCtrlScores = () => {
-        const studentMap: Record<string, any> = {};
-        filtered.students.forEach((s: any) => { studentMap[s.id] = s; });
-
-        // 按学生分组，时间升序（第1次→最新）
-        const byStudent: Record<string, any[]> = {};
-        filtered.thinkingProcesses
-            .filter((t: any) => t.ctrl_score?.total != null)
-            .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-            .forEach((t: any) => {
-                if (!byStudent[t.user_id]) byStudent[t.user_id] = [];
-                byStudent[t.user_id].push(t);
+    // 每个文体与量规版本单独占一行；证据不足保留空分，便于教学复核。
+    const exportVersionedCtrlScores = () => {
+        const byId = new Map(filtered.students.map((student: any) => [student.id, student]));
+        const rows: string[][] = [[
+            '姓名', '学号', '班级', '题目', '文体', '量规版本', '总分',
+            '维度1', '维度1分数', '维度1证据状态', '维度1学生原文',
+            '维度2', '维度2分数', '维度2证据状态', '维度2学生原文',
+            '维度3', '维度3分数', '维度3证据状态', '维度3学生原文',
+            '维度4', '维度4分数', '分析时间', '教师已复核',
+        ]];
+        const addLegacy = (process: any, mode: 'argumentative' | 'narrative') => {
+            const score = process.ctrl_score;
+            if (!score || typeof score !== 'object') return;
+            const isNarrativeV2 = mode === 'narrative' && score.rubricVersion === 'narrative-ct-v2';
+            const labels = isNarrativeV2
+                ? ['证据辨识与依据意识', '推理与行动判断', '自我监控与修订', '']
+                : mode === 'narrative'
+                    ? ['叙事一致性', '事件推进与连贯性', '语言自主性', '细节与回望']
+                    : ['观点一致性', '论证递进性', '语言自主性', '观点拓展度'];
+            const keys = isNarrativeV2
+                ? ['evidenceRecognition', 'reasoningJudgment', 'selfMonitoringRevision', '']
+                : ['opinionConsistency', 'argumentProgression', 'linguisticAutonomy', 'thoughtExpansion'];
+            const student: any = byId.get(process.user_id) || {};
+            rows.push([
+                student.name || '', student.student_id || '', student.class_name || '', process.topic || '',
+                mode === 'narrative' ? '记叙文' : '议论文', score.rubricVersion || `${mode}-legacy`,
+                typeof score.total === 'number' ? String(score.total) : '',
+                labels[0], String(score[keys[0]] ?? ''), '', '', labels[1], String(score[keys[1]] ?? ''), '', '',
+                labels[2], String(score[keys[2]] ?? ''), '', '', labels[3], keys[3] ? String(score[keys[3]] ?? '') : '',
+                score.analyzedAt || '', score.reviewed ? '是' : '否',
+            ]);
+        };
+        filtered.thinkingProcesses.forEach((process: any) => {
+            const mode = isArgumentativeProcess(process);
+            if (mode === null) return;
+            addLegacy(process, mode ? 'argumentative' : 'narrative');
+            const score = mode ? process.ctrl_score_argumentative_v2 as ArgumentativeCtrlV2 | null : null;
+            if (!score || score.rubricVersion !== 'argumentative-ct-v2') return;
+            const student: any = byId.get(process.user_id) || {};
+            const dimension = (key: keyof ArgumentativeCtrlV2['dimensions']) => score.dimensions?.[key];
+            const row = [student.name || '', student.student_id || '', student.class_name || '', process.topic || '', '议论文', score.rubricVersion,
+                typeof score.total === 'number' ? String(score.total) : '证据不足'];
+            (['argumentEvidence', 'reasoningConditions', 'argumentRevision'] as const).forEach((key, index) => {
+                const dim = dimension(key);
+                row.push(['论点与依据辨识', '推理与条件审查', '自我监控与有据修订'][index],
+                    typeof dim?.score === 'number' ? String(dim.score) : '', dim?.evidenceStatus || 'insufficient',
+                    dim?.evidence?.map(item => item.quote).join(' | ') || '');
             });
-
-        if (Object.keys(byStudent).length === 0) {
-            alert('当前筛选范围内暂无已分析的审辨信度记录');
-            return;
-        }
-
-        // 找出最多分析次数，用于生成动态列头
-        const maxCount = Math.max(...Object.values(byStudent).map(arr => arr.length));
-
-        // 构建表头
-        const header = [
-            '姓名', '学号', '班级',
-            '分析次数', '平均总分', '首次总分', '最新总分', '分数变化',
-            '议论文平均观点一致性', '议论文平均论证递进性', '议论文平均语言自主性', '议论文平均观点拓展度',
-            '平均证据辨识与依据意识', '平均推理与行动判断', '平均自我监控与修订',
-        ];
-        for (let i = 1; i <= maxCount; i++) {
-            header.push(
-                `第${i}次题目`, `第${i}次文体`, `第${i}次总分`,
-                `第${i}次旧量表维度1（议论文/旧版记叙文）`, `第${i}次旧量表维度2（议论文/旧版记叙文）`,
-                `第${i}次旧量表维度3（议论文/旧版记叙文）`, `第${i}次旧量表维度4（议论文/旧版记叙文）`,
-                `第${i}次证据辨识与依据意识`, `第${i}次推理与行动判断`, `第${i}次自我监控与修订`,
-                `第${i}次分析时间`,
-            );
-        }
-
-        const rows: string[][] = [header];
-
-        // 按班级+姓名排序输出
-        const sortedStudentIds = Object.keys(byStudent).sort((a, b) => {
-            const sa = studentMap[a] || {};
-            const sb = studentMap[b] || {};
-            const classCompare = (sa.class_name || '').localeCompare(sb.class_name || '');
-            return classCompare !== 0 ? classCompare : (sa.name || '').localeCompare(sb.name || '');
-        });
-
-        sortedStudentIds.forEach(uid => {
-            const s = studentMap[uid] || {};
-            const records = byStudent[uid];
-            const scores = records.map((t: any) => t.ctrl_score.total ?? 0);
-            const avg = (scores.reduce((a: number, b: number) => a + b, 0) / scores.length).toFixed(1);
-            const first = scores[0].toFixed(1);
-            const latest = scores[scores.length - 1].toFixed(1);
-            const delta = (scores[scores.length - 1] - scores[0]).toFixed(1);
-
-            const isNarrativeRecord = (t: any) => t.writing_mode === 'narrative'
-                || t.ctrl_score?.writingMode === 'narrative'
-                || t.ctrl_score?.rubricVersion === 'narrative-ct-v2';
-            const argumentativeRecords = records.filter((t: any) => !isNarrativeRecord(t));
-            const currentNarrativeRecords = records.filter((t: any) => isNarrativeRecord(t) && t.ctrl_score?.rubricVersion === 'narrative-ct-v2');
-            const dimAvgs = ['opinionConsistency', 'argumentProgression', 'linguisticAutonomy', 'thoughtExpansion'].map(d => {
-                const vals = argumentativeRecords.map((t: any) => t.ctrl_score?.[d]).filter((v: any) => typeof v === 'number');
-                return vals.length ? (vals.reduce((a: number, b: number) => a + b, 0) / vals.length).toFixed(1) : '';
-            });
-            const narrativeDimAvgs = ['evidenceRecognition', 'reasoningJudgment', 'selfMonitoringRevision'].map(d => {
-                const vals = currentNarrativeRecords.map((t: any) => t.ctrl_score?.[d]).filter((v: any) => typeof v === 'number');
-                return vals.length ? (vals.reduce((a: number, b: number) => a + b, 0) / vals.length).toFixed(1) : '';
-            });
-
-            const row: string[] = [
-                s.name || '', s.student_id || '', s.class_name || '',
-                String(records.length), avg, first, latest,
-                Number(delta) > 0 ? `+${delta}` : delta,
-                ...dimAvgs, ...narrativeDimAvgs,
-            ];
-
-            // 逐次追加
-            for (let i = 0; i < maxCount; i++) {
-                if (i < records.length) {
-                    const t = records[i];
-                    const cs = t.ctrl_score;
-                    const narrative = isNarrativeRecord(t);
-                    row.push(
-                        t.topic || '',
-                        narrative ? '记叙文' : '议论文',
-                        String(cs.total ?? ''),
-                        String(cs.opinionConsistency ?? ''),
-                        String(cs.argumentProgression ?? ''),
-                        String(cs.linguisticAutonomy ?? ''),
-                        String(cs.thoughtExpansion ?? ''),
-                        String(cs.evidenceRecognition ?? ''),
-                        String(cs.reasoningJudgment ?? ''),
-                        String(cs.selfMonitoringRevision ?? ''),
-                        cs.analyzedAt ? new Date(cs.analyzedAt).toLocaleString('zh-CN') : '',
-                    );
-                } else {
-                    row.push('', '', '', '', '', '', '', '', '', '', '');
-                }
-            }
+            row.push('', '', score.analyzedAt || '', score.reviewed ? '是' : '否');
             rows.push(row);
         });
-
+        if (rows.length === 1) { alert('当前筛选范围内暂无审辨信度记录'); return; }
         const label = selectedClass === 'all' ? '全部班级' : selectedClass;
-        downloadCSV(rows, `审辨信度汇总_${label}_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '')}.csv`);
+        downloadCSV(rows, `审辨信度_按量规版本_${label}_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '')}.csv`);
     };
 
     const [showExportMenu, setShowExportMenu] = useState(false);
     const [showBatchCtrl, setShowBatchCtrl] = useState(false);
+    const [showBatchArgumentativeCtrl, setShowBatchArgumentativeCtrl] = useState(false);
 
     const tabs: { key: TeacherTab; label: string }[] = [
         { key: 'overview', label: '教学概览' },
@@ -646,8 +662,9 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                             onClick={() => setShowBatchCtrl(true)}
                             className="text-xs px-3 py-1.5 rounded-lg font-bold bg-slate-900 text-white hover:bg-black transition-all shadow-sm whitespace-nowrap"
                         >
-                            批量审辨信度
+                            记叙文批量评分
                         </button>
+                        <button onClick={() => setShowBatchArgumentativeCtrl(true)} className="text-xs px-3 py-1.5 rounded-lg font-bold bg-blue-900 text-white hover:bg-blue-950 whitespace-nowrap">议论文新版重评</button>
 
                         {/* 导出数据 */}
                         <div className="relative">
@@ -665,7 +682,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                                             className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 font-medium">
                                             学生学习汇总
                                         </button>
-                                        <button onClick={() => { exportCtrlScores(); setShowExportMenu(false); }}
+                                        <button onClick={() => { exportVersionedCtrlScores(); setShowExportMenu(false); }}
                                             className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 font-medium">
                                             审辨信度汇总
                                         </button>
@@ -723,6 +740,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                     classOptions={classList}
                 />
             )}
+            {showBatchArgumentativeCtrl && <BatchArgumentativeCtrlV2Modal
+                onClose={() => setShowBatchArgumentativeCtrl(false)}
+                onSaved={handleThinkingProcessCtrlSaved}
+                classOptions={classList}
+            />}
 
             {/* Footer */}
             <footer className="border-t border-slate-200 py-6 text-center">

@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from 'recharts';
 import ThinkingProcessView from '../../components/ThinkingProcessView';
 import type { CtrlScore } from '../../services/geminiService';
+import type { ArgumentativeCtrlV2 } from '../../services/argumentativeCtrlRubric';
 
 // 预定义班级列表
 const PREDEFINED_CLASSES = ['2024级A甲6', '2024级A乙6', '2025级A甲2', '2025级A乙2'];
@@ -26,7 +27,7 @@ interface StudentProfilesTabProps {
     /** 教师端合并后的班级列表（固定班 + 数据库已有 class_name） */
     classOptions?: string[];
     onUpdateStudentClass?: (userId: string, className: string) => Promise<void>;
-    onThinkingProcessCtrlSaved?: (processId: string, ctrlScore: CtrlScore) => void;
+    onThinkingProcessCtrlSaved?: (processId: string, ctrlScore: CtrlScore | ArgumentativeCtrlV2, field?: 'ctrl_score' | 'ctrl_score_argumentative_v2') => void;
 }
 
 const StudentProfilesTab: React.FC<StudentProfilesTabProps> = ({

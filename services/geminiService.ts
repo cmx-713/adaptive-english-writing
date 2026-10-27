@@ -24,6 +24,13 @@ import {
   NarrativeEvidenceClaim,
   NarrativeEvidenceKey,
 } from './narrativeCoachingRules';
+import {
+  ARGUMENTATIVE_CTRL_KEYS,
+  collectStudentEvidence,
+  normalizeArgumentativeCtrlV2,
+  type ArgumentativeProcessInput,
+  type ArgumentativeCtrlV2,
+} from './argumentativeCtrlRubric';
 
 // Define the IdeaValidationResult type locally and export it as it is used by components
 export interface IdeaValidationResult {
@@ -2549,4 +2556,63 @@ overallComment 用中文写 3-4 句，概括学生可见的思维行为及下一
     analyzedAt: new Date().toISOString(),
     writingMode,
   };
+};
+
+/** 议论文新版过程量规。与旧版四维和记叙文评分分离。 */
+export const analyzeArgumentativeCtrlScoreV2 = async (process: ArgumentativeProcessInput): Promise<ArgumentativeCtrlV2> => {
+  const sources = collectStudentEvidence(process);
+  const hasProcessEvidence = sources.some(item => item.source === 'initial_idea' || item.source === 'student_answer' || item.source === 'student_draft');
+  if (!hasProcessEvidence) {
+    const dimensions = Object.fromEntries(ARGUMENTATIVE_CTRL_KEYS.map(key => [key, {
+      evidenceStatus: 'insufficient',
+      evidence: [],
+      explanation: '仅有终稿或现有过程记录为空，无法据此判断学生的写作思维过程。',
+    }]));
+    return normalizeArgumentativeCtrlV2({ dimensions, overallComment: '过程证据不足；保留作文批改结果，待有构思、回答或草稿记录后再评估审辨思维。' }, sources);
+  }
+
+  const evidenceItemSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      source: { type: Type.STRING, enum: ['initial_idea', 'student_answer', 'student_draft', 'student_final', 'student_reflection'] },
+      cardId: { type: Type.STRING },
+      quote: { type: Type.STRING },
+    },
+    required: ['source', 'quote'],
+  };
+  const dimensionSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      score: { type: Type.NUMBER },
+      evidenceStatus: { type: Type.STRING, enum: ['sufficient', 'insufficient'] },
+      evidence: { type: Type.ARRAY, items: evidenceItemSchema },
+      explanation: { type: Type.STRING },
+    },
+    required: ['evidenceStatus', 'evidence', 'explanation'],
+  };
+  const schema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      dimensions: {
+        type: Type.OBJECT,
+        properties: Object.fromEntries(ARGUMENTATIVE_CTRL_KEYS.map(key => [key, dimensionSchema])),
+        required: [...ARGUMENTATIVE_CTRL_KEYS],
+      },
+      overallComment: { type: Type.STRING },
+    },
+    required: ['dimensions', 'overallComment'],
+  };
+  const evidenceText = sources.map((item, index) =>
+    `【材料${index + 1}，来源=${item.source}${item.cardId ? `，cardId=${item.cardId}` : ''}】\n${item.text}`
+  ).join('\n\n');
+  const systemPrompt = `你是大学英语议论文写作过程的审辨思维评价者。只根据学生自己写出的材料评分，不能把导师提问、AI诊断、AI拓展建议、AI自动整理的路线图或AI范例当作学生能力证据。作文语言准确性、篇幅、引言结论和连接词由另一套作文批改评价，不得用来替代思维证据。
+
+三项能力各占三分之一，每项0-10分：
+1. argumentEvidence「论点与依据辨识」：能否明确主张、选出相关事实/案例/可核查依据，并区分已知事实与个人推断。9-10：依据相关，事实与推断区分清楚；6-8：有相关依据，区分或关联解释尚浅；3-5：仅有局部依据或主要停留在笼统主张；0-2：现有学生回答明确显示无相关依据或把推测当事实。
+2. reasoningConditions「推理与条件审查」：能否说明依据如何支持主张，并审查必要前提、适用条件和边界；情境适合时考虑其他解释。9-10：推理链清晰且条件判断恰当；6-8：基本解释了依据和主张的联系，条件审查较简略；3-5：联系含糊或仅有结论；0-2：现有回答中的推理明显失据或自相矛盾。不要求每篇文章都提出反方观点。
+3. argumentRevision「自我监控与有据修订」：能否识别原观点或论证缺口，依据追问补充、修订，或说明为何保留原观点。9-10：有明确缺口意识与有据修订/保留；6-8：可见调整或理由，但说明尚浅；3-5：仅有局部自查，理由薄弱；0-2：现有学生回答明确显示未检查缺口或无依据地改变判断。单纯终稿变长或AI自动整理内容不能算学生修订。
+
+评分必须提供1-2条来自下方学生材料的逐字短引文，source与cardId须准确匹配。若某项缺少可以支持判断的学生过程证据，evidenceStatus=insufficient，省略score，解释缺了什么；不能默认5分，也不能因没有记录而给0分。argumentRevision尤其需要学生自己的追问回答或自检说明。对有理由保留原观点的学生应按其判断质量评价。所有评语使用中文。只输出符合schema的JSON。`;
+  const raw = await callAI(systemPrompt, `写作题目：${process.topic}\n\n以下仅为学生原文：\n${evidenceText}`, schema);
+  return normalizeArgumentativeCtrlV2(safeJsonParse(raw, 'analyzeArgumentativeCtrlScoreV2'), sources);
 };

@@ -4,11 +4,13 @@ import { analyzeCtrlScore, CtrlScore } from '../services/geminiService';
 import { saveCtrlScore, markCtrlReviewed } from '../services/supabaseDataService';
 import { getNarrativeFocusLabel } from '../types';
 import UiIcon, { type UiIconName } from './UiIcon';
+import ArgumentativeCtrlV2Panel from './ArgumentativeCtrlV2Panel';
+import type { ArgumentativeCtrlV2 } from '../services/argumentativeCtrlRubric';
 
 interface ThinkingProcessViewProps {
     processes: any[];
     /** 写入 Supabase 成功后回调，用于教师端全局同步 thinkingProcesses，切换学生不丢 */
-    onThinkingProcessCtrlSaved?: (processId: string, ctrlScore: CtrlScore) => void;
+    onThinkingProcessCtrlSaved?: (processId: string, ctrlScore: CtrlScore | ArgumentativeCtrlV2, field?: 'ctrl_score' | 'ctrl_score_argumentative_v2') => void;
 }
 
 const CTRL_DIMS = [
@@ -297,7 +299,9 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                 const expansions = proc.personalized_expansions || {};
                 const drafts = proc.dimension_drafts || {};
                 const assembled = proc.assembled_essay;
-                const isNarrativeProcess = Object.values(validations).some((value: any) => value?.writingMode === 'narrative')
+                const isNarrativeProcess = proc.writing_mode === 'narrative'
+                    || cards.some((card: any) => !!card?.narrativeRole)
+                    || Object.values(validations).some((value: any) => value?.writingMode === 'narrative')
                     || Object.values(drafts).some((value: any) => value?.scaffoldData?.writingMode === 'narrative');
 
                 // 计算完成阶段数
@@ -344,12 +348,15 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                         {isExpanded && (
                             <div className="border-t border-slate-100 px-4 py-4 space-y-4 animate-fade-in-up">
                                 {/* 审辨信度面板 */}
-                                <CtrlScorePanel
+                                {isNarrativeProcess ? <CtrlScorePanel
                                     processId={proc.id}
                                     ctrlScore={effectiveCtrl}
                                     processData={proc}
-                                    onCtrlPersisted={(id, next) => onThinkingProcessCtrlSaved?.(id, next)}
-                                />
+                                    onCtrlPersisted={(id, next) => onThinkingProcessCtrlSaved?.(id, next, 'ctrl_score')}
+                                /> : <ArgumentativeCtrlV2Panel
+                                    process={proc}
+                                    onSaved={(id, next) => onThinkingProcessCtrlSaved?.(id, next, 'ctrl_score_argumentative_v2')}
+                                />}
                                 {/* 时间线 */}
                                 <div className="relative">
                                     {/* 竖线 */}

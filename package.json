@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test:argumentative-rubric": "node scripts/verify-argumentative-rubric.cjs",
     "preview": "vite preview"
   },
   "dependencies": {

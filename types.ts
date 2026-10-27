@@ -97,6 +97,7 @@ export interface InspirationHistoryData {
   validationResults?: Record<string, unknown>;
   personalizedExpansions?: Record<string, string[]>;
   assembledEssay?: { introduction: string; bodyParagraphs: { dimension: string; draft: string }[]; conclusion: string } | null;
+  argumentReflection?: { text: string; updatedAt: string } | null;
   submittedAt?: string;
 }
 
