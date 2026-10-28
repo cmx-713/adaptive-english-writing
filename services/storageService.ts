@@ -1,13 +1,24 @@
 
 import { HistoryItem, ScaffoldContent, EssayHistoryData, HistoryDataType, InspirationHistoryData, DrillHistoryData, AggregatedError, VocabularyItem } from "../types";
 
-const STORAGE_KEY = "cet_writing_history_v2";
+const LEGACY_STORAGE_KEY = "cet_writing_history_v2";
+let activeHistoryUserId: string | null = null;
+
+/** 本机学习历史按 Supabase 用户 ID 隔离；旧共享键保留但不自动归属任何学生。 */
+export const setHistoryUserScope = (userId: string | null) => {
+  activeHistoryUserId = userId?.trim() || null;
+};
+
+export const getHistoryStorageKey = () => activeHistoryUserId ? `${LEGACY_STORAGE_KEY}:${activeHistoryUserId}` : null;
+export const isHistoryUserScope = (userId: string | undefined) => !!userId && activeHistoryUserId === userId;
 
 export const saveToHistory = (
   topic: string,
   data: ScaffoldContent | EssayHistoryData | InspirationHistoryData | DrillHistoryData,
   dataType: HistoryDataType // Mandatory: Enforce explicit type passing
 ): HistoryItem => {
+  const storageKey = getHistoryStorageKey();
+  if (!storageKey) throw new Error('请先登录，再保存学习记录。');
 
   // Strict Validation for dataType
   const validTypes: HistoryDataType[] = ['scaffold', 'essay_grade', 'inspiration', 'drill'];
@@ -29,13 +40,15 @@ export const saveToHistory = (
 
   // Add to beginning, limit to 30 items
   const newHistory = [newItem, ...history].slice(0, 30);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(newHistory));
+  localStorage.setItem(storageKey, JSON.stringify(newHistory));
   return newItem;
 };
 
 export const getHistory = (typeFilter?: HistoryDataType): HistoryItem[] => {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
+    const storageKey = getHistoryStorageKey();
+    if (!storageKey) return [];
+    const stored = localStorage.getItem(storageKey);
     let items: any[] = stored ? JSON.parse(stored) : [];
 
     // Migration & Cleanup Logic:
@@ -69,19 +82,23 @@ export const getHistory = (typeFilter?: HistoryDataType): HistoryItem[] => {
 };
 
 export const updateHistoryItemData = (id: string, patch: Record<string, unknown>): HistoryItem[] => {
+  const storageKey = getHistoryStorageKey();
+  if (!storageKey) return [];
   const history = getHistory();
   const updated = history.map(item => item.id === id
     ? { ...item, data: { ...(item.data as object), ...patch } as unknown as HistoryItem['data'] }
     : item
   );
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+  localStorage.setItem(storageKey, JSON.stringify(updated));
   return updated;
 };
 
 export const deleteFromHistory = (id: string): HistoryItem[] => {
+  const storageKey = getHistoryStorageKey();
+  if (!storageKey) return [];
   const history = getHistory();
   const newHistory = history.filter(item => item.id !== id);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(newHistory));
+  localStorage.setItem(storageKey, JSON.stringify(newHistory));
   return newHistory;
 };
 

@@ -11,6 +11,7 @@ import { isArgumentativeProcess } from '../services/argumentativeCtrlRubric';
 import BatchArgumentativeCtrlV2Modal from '../components/BatchArgumentativeCtrlV2Modal';
 import BatchTopicPicker, { type BatchTopicOption } from '../components/BatchTopicPicker';
 import ProcessEvidenceExportModal from '../components/ProcessEvidenceExportModal';
+import EssaySubmissionTab from './teacher/EssaySubmissionTab';
 
 /** 本校固定班顺序 + 数据库已有 class_name（含外校虚拟班等），去重排序 */
 function mergeTeacherClassOptions(predefined: string[], allUsers: any[]): string[] {
@@ -362,7 +363,7 @@ import EssayGalleryTab from './teacher/EssayGalleryTab';
 import UsageTab from './teacher/UsageTab';
 import RosterTab from './teacher/RosterTab';
 
-type TeacherTab = 'overview' | 'analytics' | 'students' | 'essays' | 'usage' | 'external' | 'roster';
+type TeacherTab = 'overview' | 'analytics' | 'students' | 'submissions' | 'essays' | 'usage' | 'external' | 'roster';
 
 interface TeacherDashboardProps {
     user: User;
@@ -563,6 +564,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
         { key: 'overview', label: '教学概览' },
         { key: 'analytics', label: '学情分析' },
         { key: 'students', label: '学生档案' },
+        { key: 'submissions', label: '提交情况' },
         { key: 'essays', label: '作文详情' },
         { key: 'usage', label: '使用统计' },
         { key: 'roster', label: '受邀名单' },
@@ -726,6 +728,9 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                 )}
                 {activeTab === 'essays' && (
                     <EssayGalleryTab essays={filtered.essays} isLoading={isLoading} />
+                )}
+                {activeTab === 'submissions' && !isLoading && (
+                    <EssaySubmissionTab students={students} selectedClass={selectedClass} classOptions={classList} />
                 )}
                 {activeTab === 'usage' && (
                     <UsageTab essays={filtered.essays} drills={filtered.drills} scaffolds={filtered.scaffolds} usageLogs={filtered.usageLogs} isLoading={isLoading} />

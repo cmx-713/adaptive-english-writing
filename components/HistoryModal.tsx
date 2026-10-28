@@ -10,9 +10,11 @@ interface HistoryModalProps {
   onSelect: (item: HistoryItem) => void;
   onDelete: (id: string) => void;
   title?: string;
+  isLoading?: boolean;
+  error?: string;
 }
 
-const HistoryModal: React.FC<HistoryModalProps> = ({ isOpen, onClose, history, onSelect, onDelete, title = "History" }) => {
+const HistoryModal: React.FC<HistoryModalProps> = ({ isOpen, onClose, history, onSelect, onDelete, title = "History", isLoading = false, error = '' }) => {
   if (!isOpen) return null;
 
   return (
@@ -36,7 +38,9 @@ const HistoryModal: React.FC<HistoryModalProps> = ({ isOpen, onClose, history, o
 
         {/* List */}
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          {history.length === 0 ? (
+          {isLoading && <p role="status" className="text-sm text-slate-500">正在读取云端历史记录…</p>}
+          {error && <p role="alert" className="text-sm text-amber-700">{error}</p>}
+          {!isLoading && history.length === 0 ? (
             <div className="text-center py-12 text-slate-400">
               <UiIcon name="folder" size={28} className="mx-auto mb-2" />
               <p>暂无历史记录</p>
@@ -60,12 +64,12 @@ const HistoryModal: React.FC<HistoryModalProps> = ({ isOpen, onClose, history, o
                     <span className="text-xs font-mono text-slate-400 bg-slate-50 px-2 py-1 rounded">
                       {new Date(item.timestamp).toLocaleDateString()}
                     </span>
-                    <button 
+                    {!item.id.startsWith('cloud:') && !item.id.startsWith('cloud-grade:') && !inspirationData?.cloudProcessId && <button
                       onClick={(e) => { e.stopPropagation(); onDelete(item.id); }}
                       className="text-slate-300 hover:text-red-500 transition-colors px-2 text-xs"
                     >
                       删除
-                    </button>
+                    </button>}
                   </div>
                   
                   <div onClick={() => onSelect(item)} className="cursor-pointer">
@@ -96,6 +100,7 @@ const HistoryModal: React.FC<HistoryModalProps> = ({ isOpen, onClose, history, o
                                <span className="text-xs text-slate-400">
                                  已填写 {Object.keys(inspirationInputs).length} 项
                                </span>
+                               {inspirationData?.cloudStatus && <span className="text-xs text-slate-500">{inspirationData.cloudStatus === 'sent_to_grader' ? '已送批改' : '进行中'}</span>}
                            </div>
                            <div className="flex gap-2 mt-2 flex-wrap">
                                {inspirationCards.length > 0 ? inspirationCards.map(c => (

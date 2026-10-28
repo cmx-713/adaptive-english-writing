@@ -21,6 +21,7 @@ const ProcessEvidenceExportModal: React.FC<Props> = ({ classOptions, initialClas
   const [recordLoading, setRecordLoading] = useState(false)
   const [records, setRecords] = useState<any[]>([])
   const [students, setStudents] = useState<any[]>([])
+  const [coverage, setCoverage] = useState<{ sentStudents: number; completeStudents: number; missingStudents: any[] } | null>(null)
   const [loadedScopeKey, setLoadedScopeKey] = useState('')
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -34,6 +35,7 @@ const ProcessEvidenceExportModal: React.FC<Props> = ({ classOptions, initialClas
     setTopics([])
     setTopic('')
     setRecords([])
+    setCoverage(null)
     setLoadedScopeKey('')
     setError('')
     if (!className) return
@@ -52,6 +54,7 @@ const ProcessEvidenceExportModal: React.FC<Props> = ({ classOptions, initialClas
   useEffect(() => {
     setRecords([])
     setStudents([])
+    setCoverage(null)
     setLoadedScopeKey('')
     setMessage('')
     if (!className || !topic || !selectedTopic || invalidDateRange) {
@@ -74,6 +77,7 @@ const ProcessEvidenceExportModal: React.FC<Props> = ({ classOptions, initialClas
       }
       setRecords(result.data)
       setStudents(result.students)
+      setCoverage(result.coverage || null)
       setLoadedScopeKey(scopeKey)
     }).catch(err => {
       if (active) setError(`读取过程记录失败：${err instanceof Error ? err.message : String(err)}`)
@@ -98,9 +102,9 @@ const ProcessEvidenceExportModal: React.FC<Props> = ({ classOptions, initialClas
     if (!topic || !records.length || loadedScopeKey !== scopeKey || recordLoading || error) return
     const label = [className, mode === 'narrative' ? '记叙文' : '议论文', topic, fromDate || toDate ? `${fromDate || '起'}至${toDate || '今'}` : '全部批次'].join('_')
     try {
-      if (format === 'json') downloadProcessEvidenceJsonBundle(records, students, label)
-      else downloadProcessEvidenceBundle(records, students, label)
-      setMessage(`已开始下载该题目的 ${records.length} 篇过程记录。`)
+      if (format === 'json') downloadProcessEvidenceJsonBundle(records, students, label, coverage)
+      else downloadProcessEvidenceBundle(records, students, label, coverage)
+      setMessage(`已开始下载该题目的 ${records.length} 条完整过程记录。`)
     } catch (err) {
       setError(`生成证据包失败：${err instanceof Error ? err.message : String(err)}`)
     }
@@ -135,18 +139,18 @@ const ProcessEvidenceExportModal: React.FC<Props> = ({ classOptions, initialClas
 
       <div className="space-y-1.5">
         <label className="text-sm text-slate-700">写作题目</label>
-        <BatchTopicPicker topics={topics} value={topic} onChange={chooseTopic} disabled={!className || topicLoading} placeholder={topicLoading ? '正在读取题目…' : '请选择要导出的题目'} />
+        <BatchTopicPicker topics={topics} value={topic} onChange={chooseTopic} disabled={!className || topicLoading} placeholder={topicLoading ? '正在读取题目…' : '请选择要导出的题目'} countLabel="条完整过程" />
         {className && !topicLoading && !topics.length && !error && <p className="text-xs text-slate-500">该班暂无可导出的成文记录。</p>}
       </div>
 
       {selectedTopic && <div className="space-y-2">
         {selectedTopic.batches.length > 1 && <label className="block text-sm text-slate-700">写作批次
           <select value={batch} onChange={event => chooseBatch(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2">
-            <option value="">全部批次（{selectedTopic.count} 篇）</option>
+            <option value="">全部批次（{selectedTopic.count} 条完整过程）</option>
             {selectedTopic.batches.map(item => <option key={item.key} value={item.key}>{item.label}</option>)}
           </select>
         </label>}
-        <p className="text-xs text-slate-500">同一题目多次布置时，可选择批次或用创建日期限定。</p>
+        <p className="text-xs text-slate-500">同一题目多次布置时，可选择批次或用日期限定。过程按创建日期、批改记录按生成日期筛选。</p>
         <div className="grid grid-cols-2 gap-3">
           <label className="text-xs text-slate-600">开始日期<input type="date" value={fromDate} onChange={event => { setFromDate(event.target.value); setBatch('') }} className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-2" /></label>
           <label className="text-xs text-slate-600">结束日期<input type="date" value={toDate} onChange={event => { setToDate(event.target.value); setBatch('') }} className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-2" /></label>
@@ -156,7 +160,11 @@ const ProcessEvidenceExportModal: React.FC<Props> = ({ classOptions, initialClas
       {invalidDateRange && <p role="alert" className="text-sm text-rose-700">结束日期不能早于开始日期。</p>}
       {recordLoading && <p className="text-sm text-slate-500">正在统计该题目的过程记录…</p>}
       {topic && !recordLoading && loadedScopeKey === scopeKey && <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
-        {className} · {topic}：本次将导出 <strong>{records.length}</strong> 篇完整过程记录。
+        <p>{className} · {topic}：<strong>{coverage?.sentStudents ?? 0}</strong> 人已送批改，<strong>{records.length}</strong> 条过程记录可导出（覆盖 {coverage?.completeStudents ?? 0} 人）。</p>
+        {!!coverage?.missingStudents.length && <details className="mt-2">
+          <summary className="cursor-pointer text-amber-800">另有 {coverage.missingStudents.length} 人已送批改，但缺少可导出的完整过程；查看名单</summary>
+          <p className="mt-2 text-xs leading-relaxed text-slate-700">{coverage.missingStudents.map(student => `${student.name || '未命名'}${student.student_id ? `（${student.student_id}）` : ''}`).join('、')}</p>
+        </details>}
       </div>}
       {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
       {message && <p role="status" className="text-sm text-emerald-700">{message}</p>}

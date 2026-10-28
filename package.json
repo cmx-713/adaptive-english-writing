@@ -6,6 +6,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test:argumentative-rubric": "node scripts/verify-argumentative-rubric.cjs",
+    "test:draft-save": "node scripts/verify-draft-save.cjs",
     "preview": "vite preview"
   },
   "dependencies": {

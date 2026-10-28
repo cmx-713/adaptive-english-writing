@@ -12,6 +12,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import UiIcon from './components/UiIcon';
 import { User, ApiConfig, Tab, WritingMode } from './types';
 import { quickSignInSupabase, quickSignInExternal } from './services/supabaseDataService';
+import { setHistoryUserScope } from './services/storageService';
 
 function isRosterDenied(err: unknown): err is { code: string; message: string } {
   return (
@@ -58,6 +59,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const restoreSession = async () => {
+      setHistoryUserScope(null);
       // Check for saved user session on mount
       const savedUser = localStorage.getItem('cet_student_user');
       if (savedUser) {
@@ -66,6 +68,7 @@ const App: React.FC = () => {
 
           // 外校用户：有 id 直接恢复（与内部学生相同逻辑）
           if (parsed.role === 'external_student') {
+            setHistoryUserScope(parsed.id || null);
             setUser(parsed);
             setIsLoadingUser(false);
             return;
@@ -79,6 +82,7 @@ const App: React.FC = () => {
           }
           // 如果已有 Supabase id，直接恢复
           if (parsed.id) {
+            setHistoryUserScope(parsed.id);
             setUser(parsed);
           } else {
             // 旧格式用户：补充 Supabase id
@@ -94,6 +98,7 @@ const App: React.FC = () => {
               role: data?.role || 'student',
             };
             localStorage.setItem('cet_student_user', JSON.stringify(enrichedUser));
+            setHistoryUserScope(enrichedUser.id || null);
             setUser(enrichedUser);
           }
         } catch (e) {
@@ -138,6 +143,7 @@ const App: React.FC = () => {
         className: data.class_name || newUser.className,
       };
       localStorage.setItem('cet_student_user', JSON.stringify(enrichedUser));
+      setHistoryUserScope(enrichedUser.id || null);
       setUser(enrichedUser);
       return;
     }
@@ -155,11 +161,14 @@ const App: React.FC = () => {
       className: newUser.className || data.class_name || undefined,
     };
     localStorage.setItem('cet_student_user', JSON.stringify(enrichedUser));
+    setHistoryUserScope(enrichedUser.id || null);
     setUser(enrichedUser);
   };
 
   const handleLogout = () => {
     localStorage.removeItem('cet_student_user');
+    setHistoryUserScope(null);
+    setPrefillGraderData(null);
     setUser(null);
   };
 

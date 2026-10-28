@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { getAllLearningStats, LearningStats, getHistory, getAggregatedUserErrors, getAggregatedUserCollocations, getAggregatedUserVocab } from '../services/storageService';
-import { HistoryItem, ScaffoldContent, EssayHistoryData, AggregatedError, CritiqueCategory, EssayGradeResult, Tab } from '../types';
+import { getAllLearningStats, LearningStats, getHistory, getHistoryStorageKey, getAggregatedUserErrors, getAggregatedUserCollocations, getAggregatedUserVocab } from '../services/storageService';
+import { HistoryItem, ScaffoldContent, EssayHistoryData, InspirationHistoryData, AggregatedError, CritiqueCategory, EssayGradeResult, Tab } from '../types';
 import ResultsDisplay from '../components/ResultsDisplay';
 import GradingReport from '../components/GradingReport';
 import { getThinkingProcessByUser, getEssayGradesByUser, getVocabularyBank, deleteVocabBankEntry, VocabBankEntry, upsertVocabularyBank, getCollocationBank, deleteCollocationBankEntry, CollocationBankEntry, upsertCollocationBank, saveArgumentativeCtrlScoreV2 } from '../services/supabaseDataService';
@@ -478,6 +478,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
   // State
   const [stats, setStats] = useState<LearningStats>({ socraticCount: 0, graderCount: 0, drillCount: 0 });
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
+  const [cloudHistoryItems, setCloudHistoryItems] = useState<HistoryItem[]>([]);
   const [recentCollocations, setRecentCollocations] = useState<CollocationBankEntry[]>([]);
   const [collocationBankLoading, setCollocationBankLoading] = useState(false);
   const [recentErrors, setRecentErrors] = useState<AggregatedError[]>([]);
@@ -555,6 +556,24 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
       return [];
     }
   }, [historyItems]);
+
+  const activityHistory = useMemo(() => {
+    const cloudProcessIds = new Set(cloudHistoryItems
+      .filter(item => item.dataType === 'inspiration')
+      .map(item => (item.data as InspirationHistoryData).cloudProcessId));
+    const cloudGrades = cloudHistoryItems.filter(item => item.dataType === 'essay_grade');
+    const localOnly = historyItems.filter(item => {
+      if (item.dataType === 'inspiration' && cloudProcessIds.has((item.data as InspirationHistoryData).cloudProcessId)) return false;
+      if (item.dataType === 'essay_grade') {
+        const essay = (item.data as EssayHistoryData).essay;
+        return !cloudGrades.some(remote => remote.topic === item.topic
+          && (remote.data as EssayHistoryData).essay === essay
+          && Math.abs(remote.timestamp - item.timestamp) < 300000);
+      }
+      return true;
+    });
+    return [...cloudHistoryItems, ...localOnly].sort((a, b) => b.timestamp - a.timestamp);
+  }, [cloudHistoryItems, historyItems]);
 
   /** 首次 vs 最新写作分数：优先本地批改历史；不足 2 条时用 Supabase wc_essay_grades */
   const writingGrowthComparison = useMemo(() => {
@@ -960,6 +979,45 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
             getThinkingProcessByUser(user.id),
             getEssayGradesByUser(user.id),
           ]).then(([tpRes, essayRes]) => {
+            const processHistory: HistoryItem[] = (tpRes.data || []).map((process: any) => ({
+              id: `cloud-process:${process.id}`,
+              timestamp: new Date(process.created_at).getTime() || 0,
+              topic: process.topic || '',
+              dataType: 'inspiration',
+              data: {
+                cards: Array.isArray(process.inspiration_cards) ? process.inspiration_cards : [],
+                userInputs: process.user_ideas || {},
+                writingMode: process.writing_mode === 'narrative' ? 'narrative' : 'argumentative',
+                cloudProcessId: process.id,
+                cloudStatus: process.status,
+              } as InspirationHistoryData,
+            }));
+            const gradeHistory: HistoryItem[] = (essayRes.data || []).map((grade: any) => ({
+              id: `cloud-grade:${grade.id}`,
+              timestamp: new Date(grade.created_at).getTime() || 0,
+              topic: grade.topic || '',
+              dataType: 'essay_grade',
+              data: {
+                essay: grade.essay || '',
+                writingMode: grade.writing_mode === 'narrative' ? 'narrative' : 'argumentative',
+                result: {
+                  totalScore: grade.total_score,
+                  subScores: {
+                    content: grade.content_score,
+                    organization: grade.organization_score,
+                    proficiency: grade.proficiency_score,
+                    clarity: grade.clarity_score,
+                  },
+                  generalComment: grade.general_comment || '',
+                  issueOverview: { critical: [], general: [], minor: [] },
+                  critiques: grade.critiques || [],
+                  contrastiveLearning: grade.contrastive_learning || [],
+                  retraining: grade.retraining || { exercises: [], materials: [] },
+                  polishedEssay: grade.polished_essay || '',
+                } as EssayGradeResult,
+              } as EssayHistoryData,
+            }));
+            setCloudHistoryItems([...processHistory, ...gradeHistory]);
             const data = tpRes.data;
             if (data) {
               setUnscoredArguments(data.filter((p: any) => p.status === 'sent_to_grader'
@@ -1000,25 +1058,29 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
               sorted.map((e: any) => ({ created_at: e.created_at, total_score: e.total_score }))
             );
           }).catch(() => {
+            setCloudHistoryItems([]);
             setCtrlHistory([]);
             setUnscoredArguments([]);
             setPartialArguments([]);
             setRemoteEssayScores([]);
           });
         } else {
+          setCloudHistoryItems([]);
           setRemoteEssayScores([]);
         }
       } else {
+        setCloudHistoryItems([]);
         setRemoteEssayScores([]);
       }
     } catch {
+      setCloudHistoryItems([]);
       setRemoteEssayScores([]);
     }
   }, [isActive, refreshData]);
 
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === "cet_writing_history_v2") refreshData();
+      if (e.key === getHistoryStorageKey()) refreshData();
     };
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
@@ -1066,6 +1128,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
   const getBadgeConfig = (type: string) => {
     switch (type) {
       case 'scaffold': return { label: '审辨写作训练', style: 'bg-brand-50 text-brand-700 border-brand-200' };
+      case 'inspiration': return { label: '审辨写作过程', style: 'bg-brand-50 text-brand-700 border-brand-200' };
       case 'essay_grade': return { label: '✍️ 作文批改', style: 'bg-indigo-50 text-indigo-700 border-indigo-200' };
       case 'drill': return { label: '🏋️ 句子特训', style: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
       default: return { label: '📝 记录', style: 'bg-slate-50 text-slate-600 border-slate-200' };
@@ -1668,10 +1731,10 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
           {/* 4. History List */}
           <div className="mb-12">
             <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2"><span className="bg-blue-100 text-blue-900 w-8 h-8 rounded-lg flex items-center justify-center text-base">🗂️</span>学习活动档案 (Activity Log)</h3>
-            {historyItems.length === 0 ? <div className="text-center py-10 bg-slate-50 rounded-2xl border border-slate-100 border-dashed"><p className="text-slate-400">暂无历史记录</p></div> : (
+            {activityHistory.length === 0 ? <div className="text-center py-10 bg-slate-50 rounded-2xl border border-slate-100 border-dashed"><p className="text-slate-400">暂无历史记录</p></div> : (
               <>
                 <div className="space-y-4">
-                  {(showAllHistory ? historyItems : historyItems.slice(0, 5)).map((item) => {
+                  {(showAllHistory ? activityHistory : activityHistory.slice(0, 5)).map((item) => {
                     const badge = getBadgeConfig(item.dataType);
                     const isClickable = item.dataType === 'scaffold' || item.dataType === 'essay_grade';
                     return (
@@ -1691,6 +1754,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                                 <div className="text-xl font-bold text-blue-900 leading-none">{(item.data as any).result.totalScore}<span className="text-[10px] text-slate-400 font-normal ml-0.5">/15</span></div>
                               </div>
                             )}
+                            {item.dataType === 'inspiration' && (item.data as InspirationHistoryData).cloudStatus && <span className="text-xs text-slate-500">{(item.data as InspirationHistoryData).cloudStatus === 'sent_to_grader' ? '已送批改' : '进行中'}</span>}
                             {item.dataType === 'essay_grade' && <button onClick={(event) => handleExportEssay(event, item)} className="text-xs font-bold text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded-lg px-2.5 py-1.5 whitespace-nowrap">导出作文</button>}
                             {isClickable && <span className="text-slate-300 group-hover:text-blue-900 transition-colors text-xl">→</span>}
                           </div>
@@ -1701,13 +1765,13 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                 </div>
 
                 {/* 🆕 展开/收起按钮 */}
-                {historyItems.length > 5 && (
+                {activityHistory.length > 5 && (
                   <div className="mt-6 text-center">
                     <button
                       onClick={() => setShowAllHistory(!showAllHistory)}
                       className="px-6 py-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-sm font-bold text-slate-600 transition-all hover:shadow-md flex items-center gap-2 mx-auto"
                     >
-                      <span>{showAllHistory ? '收起' : `展开更多 (${historyItems.length - 5})`}</span>
+                      <span>{showAllHistory ? '收起' : `展开更多 (${activityHistory.length - 5})`}</span>
                       <span className={`transform transition-transform ${showAllHistory ? 'rotate-180' : ''}`}>▼</span>
                     </button>
                   </div>

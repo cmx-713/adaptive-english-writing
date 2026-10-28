@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { gradeEssay } from '../services/geminiService';
-import { saveToHistory, getHistory, deleteFromHistory, checkIsSaved } from '../services/storageService';
-import { saveEssayGradeToSupabase, logAgentUsage } from '../services/supabaseDataService';
+import { saveToHistory, getHistory, deleteFromHistory, checkIsSaved, isHistoryUserScope } from '../services/storageService';
+import { saveEssayGradeToSupabase, getEssayGradesByUser, logAgentUsage } from '../services/supabaseDataService';
 import { EssayGradeResult, HistoryItem, EssayHistoryData, WritingMode } from '../types';
 import HistoryModal from '../components/HistoryModal';
 import GradingReport from '../components/GradingReport';
@@ -108,7 +108,11 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
   // History State
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
   const [isSaved, setIsSaved] = useState(false);
+  const [cloudSaveError, setCloudSaveError] = useState(false);
+  const [retryingCloudSave, setRetryingCloudSave] = useState(false);
 
   // 会话计时
   const sessionStartRef = useRef<number>(Date.now());
@@ -121,6 +125,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
       setWritingMode(prefillData.writingMode || 'argumentative');
       setResult(null);
       setError(null);
+      setCloudSaveError(false);
       // 重置自评状态，避免残留导致视图错乱
       setSelfEvalStep('idle');
       setSelfEval({ content: 2, organization: 1, proficiency: 2, clarity: 1 });
@@ -138,12 +143,53 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
   }, [topic]);
 
   // Load history logic
-  const refreshHistory = () => {
-    setHistoryItems(getHistory('essay_grade'));
+  const refreshHistory = async () => {
+    const localItems = getHistory('essay_grade');
+    if (!supabaseUserId) {
+      setHistoryItems(localItems);
+      return;
+    }
+    setHistoryLoading(true);
+    setHistoryError('');
+    try {
+      const { data, error } = await getEssayGradesByUser(supabaseUserId);
+      if (error) throw error;
+      const cloudItems: HistoryItem[] = (data || []).map((grade: any) => ({
+        id: `cloud-grade:${grade.id}`,
+        timestamp: new Date(grade.created_at).getTime() || 0,
+        topic: grade.topic || '',
+        dataType: 'essay_grade',
+        data: {
+          essay: grade.essay || '',
+          writingMode: grade.writing_mode === 'narrative' ? 'narrative' : 'argumentative',
+          result: {
+            totalScore: grade.total_score,
+            subScores: { content: grade.content_score, organization: grade.organization_score,
+              proficiency: grade.proficiency_score, clarity: grade.clarity_score },
+            generalComment: grade.general_comment || '',
+            issueOverview: { critical: [], general: [], minor: [] },
+            critiques: grade.critiques || [],
+            contrastiveLearning: grade.contrastive_learning || [],
+            retraining: grade.retraining || { exercises: [], materials: [] },
+            polishedEssay: grade.polished_essay || '',
+          },
+        } as EssayHistoryData,
+      }));
+      const unmatchedLocal = localItems.filter(item => !cloudItems.some(remote => remote.topic === item.topic
+        && (remote.data as EssayHistoryData).essay === (item.data as EssayHistoryData).essay
+        && Math.abs(remote.timestamp - item.timestamp) < 300000));
+      setHistoryItems([...cloudItems, ...unmatchedLocal].sort((a, b) => b.timestamp - a.timestamp));
+    } catch (cause) {
+      setHistoryItems(localItems);
+      setHistoryError('云端批改历史暂时无法读取，以下仅显示本机记录。');
+      console.warn('[GradingHistory] 读取云端历史失败:', cause);
+    } finally {
+      setHistoryLoading(false);
+    }
   };
 
   useEffect(() => {
-    if (isHistoryOpen) refreshHistory();
+    if (isHistoryOpen) void refreshHistory();
   }, [isHistoryOpen]);
 
   useEffect(() => {
@@ -156,12 +202,15 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
 
   // 保存AI批改结果的公共函数
   const saveGradingResult = useCallback((gradingResult: EssayGradeResult) => {
+    if (!isHistoryUserScope(supabaseUserId)) return;
     const effectiveTopic = getEffectiveTopic();
     const historyData: EssayHistoryData = { essay: essayText, result: gradingResult, writingMode };
     saveToHistory(effectiveTopic, historyData, 'essay_grade');
     setIsSaved(true);
     if (supabaseUserId) {
-      saveEssayGradeToSupabase(supabaseUserId, effectiveTopic, essayText, gradingResult, writingMode).catch(() => { });
+      void saveEssayGradeToSupabase(supabaseUserId, effectiveTopic, essayText, gradingResult, writingMode)
+        .then(({ error }) => setCloudSaveError(!!error))
+        .catch(() => setCloudSaveError(true));
       const duration = Math.round((Date.now() - sessionStartRef.current) / 1000);
       logAgentUsage(supabaseUserId, '作文批改', 'writing_system', duration).catch(() => { });
       sessionStartRef.current = Date.now();
@@ -172,6 +221,7 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
     if (!essayText.trim()) return;
     setIsTimerActive(false);
     setError(null);
+    setCloudSaveError(false);
     aiResultRef.current = null;
     selfEvalSubmittedRef.current = false;
 
@@ -221,9 +271,23 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
     }
   };
 
+  const retryCloudSave = async () => {
+    if (!result || !supabaseUserId || retryingCloudSave) return;
+    setRetryingCloudSave(true);
+    try {
+      const { error } = await saveEssayGradeToSupabase(supabaseUserId, getEffectiveTopic(), essayText, result, writingMode);
+      setCloudSaveError(!!error);
+    } catch {
+      setCloudSaveError(true);
+    } finally {
+      setRetryingCloudSave(false);
+    }
+  };
+
   const reset = () => {
     setResult(null);
     setError(null);
+    setCloudSaveError(false);
     setEssayText('');
     setTopic('');
     setWritingMode('argumentative');
@@ -245,13 +309,15 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
       setWritingMode(data.writingMode || 'argumentative');
       setResult(data.result);
       setIsSaved(true); // It's coming from history, so it's saved
+      setCloudSaveError(false);
       setIsHistoryOpen(false);
     }
   };
 
   const handleDeleteHistoryItem = (id: string) => {
+    if (id.startsWith('cloud-grade:')) return;
     deleteFromHistory(id);
-    refreshHistory();
+    void refreshHistory();
   };
 
   // --- View 1: Input Form ---
@@ -361,6 +427,8 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
           isOpen={isHistoryOpen}
           onClose={() => setIsHistoryOpen(false)}
           history={historyItems}
+          isLoading={historyLoading}
+          error={historyError}
           onSelect={handleSelectHistoryItem}
           onDelete={handleDeleteHistoryItem}
           title="Graded Essays History"
@@ -516,6 +584,12 @@ const EssayGrader: React.FC<EssayGraderProps> = ({ prefillData, onPrefillConsume
     return (
       <>
         <SelfEvalComparison />
+        {cloudSaveError && <div role="alert" className="mx-auto mb-4 max-w-4xl rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          批改结果已暂存本机，但尚未同步到教师端。
+          <button type="button" onClick={() => void retryCloudSave()} disabled={retryingCloudSave} className="ml-2 font-semibold underline disabled:opacity-50">
+            {retryingCloudSave ? '正在重试…' : '重试同步'}
+          </button>
+        </div>}
         <GradingReport
           result={result}
           essayText={essayText}

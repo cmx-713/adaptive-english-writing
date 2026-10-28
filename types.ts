@@ -92,6 +92,8 @@ export interface EssayHistoryData {
 export interface InspirationHistoryData {
   cards: InspirationCard[];
   userInputs: Record<string, string>;
+  cloudProcessId?: string;
+  cloudStatus?: 'in_progress' | 'completed' | 'sent_to_grader';
   writingMode?: WritingMode;
   dimensionDrafts?: Record<string, DimensionDraft>;
   validationResults?: Record<string, unknown>;

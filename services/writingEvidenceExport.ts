@@ -162,21 +162,35 @@ export const downloadProcessEvidence = (process: any, student?: any) => {
 }
 
 /** 教师端批量过程证据包，一次下载一个可阅读的完整 Markdown 文件。 */
-export const downloadProcessEvidenceBundle = (processes: any[], students: any[], scopeLabel = '当前筛选范围') => {
+export interface EvidenceCoverage {
+  sentStudents: number
+  completeStudents: number
+  missingStudents: Array<{ name?: string; student_id?: string }>
+}
+
+const coverageMarkdown = (coverage?: EvidenceCoverage | null) => coverage ? [
+  `- 已送批改人数：${coverage.sentStudents}`,
+  `- 有完整过程的人数：${coverage.completeStudents}`,
+  `- 已送批改但缺完整过程的人数：${coverage.missingStudents.length}`,
+  ...(coverage.missingStudents.length ? [`- 缺完整过程名单：${coverage.missingStudents.map(student => `${student.name || '未命名'}${student.student_id ? `（${student.student_id}）` : ''}`).join('、')}`] : []),
+] : []
+
+export const downloadProcessEvidenceBundle = (processes: any[], students: any[], scopeLabel = '当前筛选范围', coverage?: EvidenceCoverage | null) => {
   const safeProcesses = Array.isArray(processes) ? processes.filter(Boolean) : []
   const safeStudents = Array.isArray(students) ? students.filter(Boolean) : []
   const studentMap = new Map(safeStudents.map(student => [student.id, student]))
   const records = safeProcesses.map(process => toEvidenceRecord(process, studentMap.get(process.user_id)))
   const base = safeFilename(`教学过程证据包_${scopeLabel.slice(0, 30)}_${today()}`)
-  const markdown = [`# 教学过程证据包`, '', `- 导出范围：${scopeLabel}`, `- 记录数：${records.length}`, `- 导出时间：${new Date().toLocaleString('zh-CN')}`, '', ...records.map((record, index) => recordMarkdown(record, index))].join('\n\n---\n\n')
+  const header = [`# 教学过程证据包`, '', `- 导出范围：${scopeLabel}`, `- 完整过程记录数：${records.length}`, ...coverageMarkdown(coverage), `- 导出时间：${new Date().toLocaleString('zh-CN')}`].join('\n')
+  const markdown = [header, ...records.map((record, index) => recordMarkdown(record, index))].join('\n\n---\n\n')
   downloadText(markdown, `${base}.md`, 'text/markdown;charset=utf-8')
 }
 
 /** 结构化备份使用独立按钮下载，避免浏览器拦截同一次点击触发的第二个文件。 */
-export const downloadProcessEvidenceJsonBundle = (processes: any[], students: any[], scopeLabel = '当前筛选范围') => {
+export const downloadProcessEvidenceJsonBundle = (processes: any[], students: any[], scopeLabel = '当前筛选范围', coverage?: EvidenceCoverage | null) => {
   const studentMap = new Map(array(students).filter(Boolean).map(student => [student.id, student]))
   const records = array(processes).filter(Boolean).map(process => toEvidenceRecord(process, studentMap.get(process.user_id)))
-  const payload = { schemaVersion: 'writing-process-evidence-v1', exportedAt: new Date().toISOString(), scope: scopeLabel, records }
+  const payload = { schemaVersion: 'writing-process-evidence-v1', exportedAt: new Date().toISOString(), scope: scopeLabel, coverage: coverage || null, records }
   const base = safeFilename(`教学过程数据_${scopeLabel.slice(0, 30)}_${today()}`)
   downloadText(JSON.stringify(payload, null, 2), `${base}.json`, 'application/json;charset=utf-8')
 }
