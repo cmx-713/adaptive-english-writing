@@ -8,6 +8,7 @@ import { analyzeArgumentativeCtrlScoreV2 } from '../services/geminiService';
 import { computeMilestones } from '../services/milestones';
 import UiIcon, { type UiIconName } from '../components/UiIcon';
 import { ARGUMENTATIVE_CTRL_DIMS, isArgumentativeProcess, type ArgumentativeCtrlV2 } from '../services/argumentativeCtrlRubric';
+import { downloadFinalEssayRecord } from '../services/writingEvidenceExport';
 
 /** 学习中心展示用：与 Supabase ctrl_score JSON 对齐的宽松类型（避免依赖 LLM 运行时模块） */
 interface CtrlScoreStudentView {
@@ -1028,6 +1029,11 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
     if (item.dataType === 'scaffold' || item.dataType === 'essay_grade') setViewingItem(item);
   };
 
+  const handleExportEssay = (event: React.MouseEvent, item: HistoryItem) => {
+    event.stopPropagation();
+    if (item.dataType === 'essay_grade') downloadFinalEssayRecord(item);
+  };
+
   const toggleExplanation = (id: number) => {
     setRevealedExplanationIds(prev => {
       const newSet = new Set(prev);
@@ -1685,6 +1691,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                                 <div className="text-xl font-bold text-blue-900 leading-none">{(item.data as any).result.totalScore}<span className="text-[10px] text-slate-400 font-normal ml-0.5">/15</span></div>
                               </div>
                             )}
+                            {item.dataType === 'essay_grade' && <button onClick={(event) => handleExportEssay(event, item)} className="text-xs font-bold text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded-lg px-2.5 py-1.5 whitespace-nowrap">导出作文</button>}
                             {isClickable && <span className="text-slate-300 group-hover:text-blue-900 transition-colors text-xl">→</span>}
                           </div>
                         </div>

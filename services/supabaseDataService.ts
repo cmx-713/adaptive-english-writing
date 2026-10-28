@@ -198,10 +198,9 @@ export interface BatchWritingScope {
 
 const applyBatchWritingScope = (query: any, scope: BatchWritingScope) => {
   query = query.in('topic', scope.topicVariants?.length ? scope.topicVariants : [scope.topic])
-  if (scope.fromDate) query = query.gte('created_at', new Date(`${scope.fromDate}T00:00:00`).toISOString())
+  if (scope.fromDate) query = query.gte('created_at', `${scope.fromDate}T00:00:00.000Z`)
   if (scope.toDate) {
-    const nextDay = new Date(`${scope.toDate}T00:00:00`)
-    nextDay.setDate(nextDay.getDate() + 1)
+    const nextDay = new Date(Date.parse(`${scope.toDate}T00:00:00.000Z`) + 24 * 60 * 60 * 1000)
     query = query.lt('created_at', nextDay.toISOString())
   }
   return query
@@ -233,13 +232,14 @@ export const getBatchWritingTopics = async (className: string, mode: 'narrative'
     for (const process of page || []) {
       if (isArgumentativeProcess(process) !== (mode === 'argumentative')) continue
       if (!process.topic?.trim()) continue
-      const original = process.topic.trim()
+      const rawTopic = process.topic
+      const original = rawTopic.trim()
       const entry = grouped.get(normalizeTopic(original)) || { topic: original, count: 0, variants: new Map(), batches: new Map() }
       entry.count += 1
-      entry.variants.set(original, (entry.variants.get(original) || 0) + 1)
+      entry.variants.set(rawTopic, (entry.variants.get(rawTopic) || 0) + 1)
       const batchKey = typeof process.created_at === 'string' ? process.created_at.slice(0, 10) : '未标注日期'
       entry.batches.set(batchKey, (entry.batches.get(batchKey) || 0) + 1)
-      if ((entry.variants.get(original) || 0) > (entry.variants.get(entry.topic) || 0)) entry.topic = original
+      if ((entry.variants.get(rawTopic) || 0) > (entry.variants.get(entry.topic) || 0)) entry.topic = original
       grouped.set(normalizeTopic(original), entry)
     }
     if (!page || page.length < 500) break
@@ -251,6 +251,80 @@ export const getBatchWritingTopics = async (className: string, mode: 'narrative'
     batches: [...entry.batches.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([key, count]) => ({ key, label: key === '未标注日期' ? key : `${key}（${count} 篇）`, count })),
   })).sort((a, b) => b.count - a.count || a.topic.localeCompare(b.topic, 'zh-CN'))
   return { data, error: null }
+}
+
+/** 教师导出专用：只读取指定班级、文体、题目和日期范围内的成文过程。 */
+export const getEvidenceExportProcesses = async (
+  className: string,
+  mode: 'narrative' | 'argumentative',
+  scope: BatchWritingScope,
+) => {
+  if (!className.trim() || !scope.topic.trim()) return { data: [] as any[], students: [] as any[], error: new Error('请先选择班级和写作题目') }
+  const { data: students, error: studentError } = await supabase
+    .from('wc_users')
+    .select('id, name, student_id, class_name')
+    .eq('class_name', className)
+    .in('role', ['student', 'external_student'])
+  if (studentError || !students?.length) return { data: [] as any[], students: students || [], error: studentError }
+
+  const processes: any[] = []
+  for (let offset = 0; ; offset += 500) {
+    let query = applyBatchWritingScope(supabase
+      .from('wc_thinking_process')
+      .select('*')
+      .in('user_id', students.map(student => student.id))
+      .not('assembled_essay', 'is', null), scope)
+    if (mode === 'argumentative') query = query.eq('status', 'sent_to_grader')
+    const { data: page, error } = await query
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(offset, offset + 499)
+    if (error) return { data: [] as any[], students, error }
+    processes.push(...(page || []))
+    if (!page || page.length < 500) break
+  }
+  const selected = processes.filter(process => isArgumentativeProcess(process) === (mode === 'argumentative'))
+  const grades: any[] = []
+  for (let offset = 0; ; offset += 500) {
+    const { data: page, error } = await supabase
+      .from('wc_essay_grades')
+      .select('id, user_id, topic, essay, created_at, total_score, general_comment, critiques')
+      .in('user_id', students.map(student => student.id))
+      .in('topic', scope.topicVariants?.length ? scope.topicVariants : [scope.topic])
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(offset, offset + 499)
+    if (error) return { data: [] as any[], students, error }
+    grades.push(...(page || []))
+    if (!page || page.length < 500) break
+  }
+  const essayKey = (value: unknown) => typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
+  const assembledText = (essay: any) => [essay?.introduction, ...(Array.isArray(essay?.bodyParagraphs) ? essay.bodyParagraphs.map((part: any) => part?.draft) : []), essay?.conclusion]
+    .filter((part): part is string => typeof part === 'string' && !!part.trim()).join(' ')
+  const gradeByEssay = new Map<string, any>()
+  for (const grade of grades) {
+    const text = essayKey(grade.essay)
+    if (!text) continue
+    const key = JSON.stringify([grade.user_id, grade.topic, text])
+    if (!gradeByEssay.has(key)) gradeByEssay.set(key, grade)
+  }
+  return {
+    data: selected.map(process => {
+      const key = JSON.stringify([process.user_id, process.topic, essayKey(assembledText(process.assembled_essay))])
+      const grade = gradeByEssay.get(key)
+      return {
+        ...process,
+        essay_grade: grade ? {
+          totalScore: grade.total_score,
+          generalComment: grade.general_comment,
+          critiques: grade.critiques,
+          gradedAt: grade.created_at,
+        } : null,
+      }
+    }),
+    students,
+    error: null,
+  }
 }
 
 export const getBatchCtrlCandidates = async (
@@ -1115,16 +1189,22 @@ export const updateThinkingProcessDraft = async (
  * 获取所有思维过程记录（教师端）
  */
 export const getAllThinkingProcesses = async (limit: number = 200) => {
-  const { data, error } = await supabase
-    .from('wc_thinking_process')
-    .select(`
-      *,
-      wc_users!inner(name, student_id)
-    `)
-    .order('created_at', { ascending: false })
-    .limit(limit)
-
-  return { data, error }
+  const pageSize = 500
+  const rows: any[] = []
+  for (let offset = 0; offset < limit; offset += pageSize) {
+    const { data, error } = await supabase
+      .from('wc_thinking_process')
+      .select(`
+        *,
+        wc_users!inner(name, student_id)
+      `)
+      .order('created_at', { ascending: false })
+      .range(offset, Math.min(offset + pageSize - 1, limit - 1))
+    if (error) return { data: rows, error }
+    rows.push(...(data || []))
+    if (!data || data.length < pageSize) break
+  }
+  return { data: rows, error: null }
 }
 
 /**
