@@ -6,8 +6,8 @@ import ResultsDisplay from '../components/ResultsDisplay';
 import HistoryModal from '../components/HistoryModal';
 import UiIcon from '../components/UiIcon';
 import { fetchInspirationCards, fetchLanguageScaffolds, fetchNarrativePlanningCards, fetchNarrativeLanguageScaffolds, generateEssayIntroConclusion, analyzeCtrlScore, analyzeArgumentativeCtrlScoreV2 } from '../services/geminiService';
-import { getHistory, deleteFromHistory, saveToHistory, checkIsSaved, updateHistoryItemData, isHistoryUserScope } from '../services/storageService';
-import { saveScaffoldToSupabase, saveInspirationToSupabase, updateScaffoldDraft, saveAssembledEssayToSupabase, logAgentUsage, createThinkingProcess, updateThinkingProcess, updateThinkingProcessDraft, saveThinkingProcessDraftSnapshot, submitThinkingProcess, saveCtrlScore, saveArgumentativeCtrlScoreV2, upsertVocabularyBank, upsertCollocationBank, getLatestUnfinishedThinkingProcess, getThinkingProcessByUser, getThinkingProcessByIdForUser } from '../services/supabaseDataService';
+import { getHistory, deleteFromHistory, saveToHistory, checkIsSaved, updateHistoryItemData } from '../services/storageService';
+import { saveScaffoldToSupabase, saveInspirationToSupabase, updateScaffoldDraft, saveAssembledEssayToSupabase, logAgentUsage, createThinkingProcess, updateThinkingProcess, updateThinkingProcessDraft, saveCtrlScore, saveArgumentativeCtrlScoreV2, upsertVocabularyBank, upsertCollocationBank, getLatestUnfinishedThinkingProcess, getThinkingProcessByUser } from '../services/supabaseDataService';
 import { UserInput, InspirationCard, ScaffoldContent, FlowState, HistoryItem, InspirationHistoryData, DimensionDraft, WritingMode } from '../types';
 import { IdeaValidationResult } from '../services/geminiService';
 import type { ArgumentReflection } from '../services/argumentativeCtrlRubric';
@@ -38,13 +38,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   const [restoredValidationResults, setRestoredValidationResults] = useState<Record<string, IdeaValidationResult>>({});
   const currentDraftRef = useRef<string>(''); // 用ref追踪实时草稿，避免频繁setState
   const draftSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const assembledSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reflectionSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const savingDraftRef = useRef(false);
-  const editVersionRef = useRef(0);
-  const [isSavingDraft, setIsSavingDraft] = useState(false);
-  const [draftSaveStatus, setDraftSaveStatus] = useState<'idle' | 'dirty' | 'saved' | 'error'>('idle');
-  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
 
   // 个性化思路拓展（Layer 2）：cardId -> string[]
   const [personalizedExpansions, setPersonalizedExpansions] = useState<Record<string, string[]>>({});
@@ -66,8 +59,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   // History State
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyError, setHistoryError] = useState('');
   const localThinkingHistoryIdRef = useRef<string | null>(null);
 
   // 会话计时
@@ -76,60 +67,12 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   // 思维过程记录 ID（用于后续更新同一条记录）
   const thinkingProcessIdRef = useRef<string | null>(null);
   const coachingTurnsRef = useRef<Record<string, any[]>>({});
-  const cancelDraftSyncTimers = () => {
-    [ideaSyncTimerRef, draftSyncTimerRef, assembledSyncTimerRef, reflectionSyncTimerRef].forEach(timerRef => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = null;
-    });
-  };
-  const markDraftChanged = () => {
-    editVersionRef.current += 1;
-    setDraftSaveStatus('dirty');
-  };
 
   // Load history on mount
-  const refreshHistory = async () => {
+  const refreshHistory = () => {
     const scaffolds = getHistory('scaffold');
     const inspirations = getHistory('inspiration');
-    const localItems = [...scaffolds, ...inspirations];
-    if (!supabaseUserId) {
-      setHistoryItems(localItems.sort((a, b) => b.timestamp - a.timestamp));
-      return;
-    }
-    setHistoryLoading(true);
-    setHistoryError('');
-    try {
-      const { data, error } = await getThinkingProcessByUser(supabaseUserId);
-      if (error) throw error;
-      const cloudItems: HistoryItem[] = (data || []).filter(process => process.topic).map(process => ({
-        id: `cloud:${process.id}`,
-        timestamp: new Date(process.created_at).getTime() || Date.now(),
-        topic: process.topic,
-        dataType: 'inspiration',
-        data: {
-          cards: Array.isArray(process.inspiration_cards) ? process.inspiration_cards : [],
-          userInputs: process.user_ideas || {},
-          writingMode: process.writing_mode === 'narrative' ? 'narrative' : 'argumentative',
-          dimensionDrafts: process.dimension_drafts || {},
-          validationResults: process.validation_results || {},
-          personalizedExpansions: process.personalized_expansions || {},
-          assembledEssay: process.assembled_essay || null,
-          argumentReflection: process.argument_reflection || null,
-          cloudProcessId: process.id,
-          cloudStatus: process.status,
-        } as InspirationHistoryData,
-      }));
-      const cloudIds = new Set((data || []).map(process => process.id));
-      const unmatchedLocalItems = localItems.filter(item =>
-        item.dataType !== 'inspiration' || !cloudIds.has((item.data as InspirationHistoryData).cloudProcessId));
-      setHistoryItems([...cloudItems, ...unmatchedLocalItems].sort((a, b) => b.timestamp - a.timestamp));
-    } catch (cause) {
-      setHistoryError('云端历史暂时无法读取，以下仅显示本机记录。');
-      setHistoryItems(localItems.sort((a, b) => b.timestamp - a.timestamp));
-      console.warn('[ThinkingHistory] 读取云端历史失败:', cause);
-    } finally {
-      setHistoryLoading(false);
-    }
+    setHistoryItems([...scaffolds, ...inspirations].sort((a, b) => b.timestamp - a.timestamp));
   };
 
   useEffect(() => {
@@ -151,7 +94,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   }, [cards, step1Inputs, writingMode, dimensionDrafts, restoredValidationResults, personalizedExpansions, assembledEssay, argumentReflection, flowState]);
 
   useEffect(() => {
-    if (isHistoryOpen) void refreshHistory();
+    if (isHistoryOpen) refreshHistory();
   }, [isHistoryOpen]);
 
   // 登录后检查是否有未提交的云端草稿。只展示最近一条，避免把学生带回旧任务。
@@ -172,7 +115,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   }, [supabaseUserId]);
 
   const resumeProcess = (process: any) => {
-    cancelDraftSyncTimers();
     const mode: WritingMode = process.writing_mode === 'narrative' ? 'narrative' : 'argumentative';
     const restoredCards = Array.isArray(process.inspiration_cards) ? process.inspiration_cards : [];
     const restoredDrafts = process.dimension_drafts && typeof process.dimension_drafts === 'object'
@@ -191,15 +133,12 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     setPersonalizedExpansions(process.personalized_expansions || {});
     setAssembledEssay(process.assembled_essay || null);
     setArgumentReflection(mode === 'argumentative' ? process.argument_reflection || null : null);
-    setDraftSaveStatus('idle');
-    setDraftSavedAt(null);
     submittedRef.current = false;
     setSubmissionError(null);
     setScaffoldData(null);
     setActiveCard(null);
     setError(null);
-    thinkingProcessIdRef.current = process.status === 'sent_to_grader' ? null : process.id || null;
-    localThinkingHistoryIdRef.current = null;
+    thinkingProcessIdRef.current = process.id || null;
     validationResultsRef.current = restoredResults;
     coachingTurnsRef.current = process.coaching_turns || {};
     setResumeCandidate(null);
@@ -208,7 +147,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
 
   // Step 1: Handle Topic Input -> Fetch Cards
   const handleTopicSubmit = async (input: UserInput) => {
-    cancelDraftSyncTimers();
     setFlowState('loading_cards');
     setCurrentTopic(input.topic);
     const selectedWritingMode = writingMode;
@@ -220,8 +158,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     setStep1Inputs({});
     setDimensionDrafts({}); // 新topic清空草稿
     setArgumentReflection(null);
-    setDraftSaveStatus('idle');
-    setDraftSavedAt(null);
     submittedRef.current = false;
     setSubmissionError(null);
     setRestoredValidationResults({});
@@ -235,7 +171,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       const fetchedCards = selectedWritingMode === 'narrative'
         ? await fetchNarrativePlanningCards(input.topic)
         : await fetchInspirationCards(input.topic);
-      if (!isHistoryUserScope(supabaseUserId)) return;
       setCards(fetchedCards);
 
       const historyData: InspirationHistoryData = {
@@ -245,17 +180,23 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       };
       const historyRecord = saveToHistory(input.topic, historyData, 'inspiration');
       localThinkingHistoryIdRef.current = historyRecord.id;
-      // 创建过程记录后再进入写作，保证本地历史与云端记录使用同一个 ID。
+      // Supabase 双写（异步，不阻断前端）
       if (supabaseUserId) {
         saveInspirationToSupabase(supabaseUserId, input.topic, fetchedCards, {}, selectedWritingMode).catch(() => { });
-        const { id, error: createError } = await createThinkingProcess(supabaseUserId, input.topic, fetchedCards, selectedWritingMode);
-        if (!isHistoryUserScope(supabaseUserId)) return;
-        if (id) {
-          thinkingProcessIdRef.current = id;
-          updateHistoryItemData(historyRecord.id, { cloudProcessId: id, cloudStatus: 'in_progress' });
-        } else {
-          console.warn('[ThinkingProcess] 创建云端草稿失败，提交时将重试:', createError);
-        }
+        // 创建思维过程记录
+        console.log('[ThinkingProcess] 正在创建, userId:', supabaseUserId, 'topic:', input.topic);
+        createThinkingProcess(supabaseUserId, input.topic, fetchedCards, selectedWritingMode)
+          .then(({ id, error }) => {
+            if (id) {
+              thinkingProcessIdRef.current = id;
+              console.log('[ThinkingProcess] ✅ 创建成功, id:', id);
+            } else {
+              console.error('[ThinkingProcess] ❌ 创建失败, id 为 null, error:', error);
+            }
+          })
+          .catch((err) => { console.error('[ThinkingProcess] ❌ 创建异常:', err); });
+      } else {
+        console.warn('[ThinkingProcess] ⚠️ supabaseUserId 为空，跳过创建');
       }
 
       setFlowState('selecting_card');
@@ -271,7 +212,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
 
   // Handle Input Changes in Step 1
   const handleStep1InputChange = (id: string, value: string) => {
-    markDraftChanged();
     setStep1Inputs(prev => {
       const next = { ...prev, [id]: value };
       // 防抖同步学生观点到 Supabase（1秒内无新输入才同步）
@@ -307,9 +247,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       const result = writingMode === 'narrative'
         ? await fetchNarrativeLanguageScaffolds(currentTopic, card.dimension, userIdea)
         : await fetchLanguageScaffolds(currentTopic, card.dimension, userIdea);
-      if (!isHistoryUserScope(supabaseUserId)) return;
       setScaffoldData(result);
-      markDraftChanged();
       currentDraftRef.current = '';
       saveToHistory(currentTopic, result, 'scaffold');
       // Supabase 双写（异步，不阻断前端）
@@ -350,7 +288,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
 
   // 草稿实时更新回调
   const handleDraftChange = (draft: string) => {
-    markDraftChanged();
     currentDraftRef.current = draft;
     if (!activeCard || !thinkingProcessIdRef.current) return;
     if (draftSyncTimerRef.current) clearTimeout(draftSyncTimerRef.current);
@@ -379,7 +316,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
 
   // 观点验证完成回调（从 PhaseOneCards 接收验证结果）
   const handleValidationComplete = (cardId: string, result: IdeaValidationResult) => {
-    markDraftChanged();
     const resultWithMode = { ...result, writingMode };
     // PhaseOneCards unmounts while the student writes in the scaffold view.
     // Keep its coaching transcript in parent state so it can be restored on return.
@@ -397,13 +333,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
         coaching_turns: coachingTurnsRef.current
       }).catch(() => { });
     }
-  };
-
-  const handlePendingAnswerChange = (cardId: string, answer: string) => {
-    const current = validationResultsRef.current[cardId];
-    if (!current) return;
-    validationResultsRef.current = { ...validationResultsRef.current, [cardId]: { ...current, pendingAnswer: answer } };
-    markDraftChanged();
   };
 
   // 根据学生选择的额外视角生成一张新的思维卡片，复用现有卡片流程
@@ -424,7 +353,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
         }
         return next;
       });
-      markDraftChanged();
     } catch (err: any) {
       console.error(err);
       setError(err.message || '新增维度失败，请重试。');
@@ -476,7 +404,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
 
   // 组合成文（不调用AI，直接进入编辑界面）
   const handleAssembleEssay = () => {
-    markDraftChanged();
     const bodyParagraphs = cards
       .filter(card => dimensionDrafts[card.id])
       .map(card => ({
@@ -509,116 +436,24 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     if (!assembledEssay || !thinkingProcessIdRef.current || submittedRef.current) return;
     const processId = thinkingProcessIdRef.current;
     const timer = setTimeout(() => {
-      assembledSyncTimerRef.current = null;
       if (submittedRef.current) return;
       updateThinkingProcessDraft(processId, {
         assembled_essay: assembledEssay,
         status: 'completed'
       }).catch(() => { });
     }, 800);
-    assembledSyncTimerRef.current = timer;
-    return () => {
-      clearTimeout(timer);
-      if (assembledSyncTimerRef.current === timer) assembledSyncTimerRef.current = null;
-    };
+    return () => clearTimeout(timer);
   }, [assembledEssay]);
 
   useEffect(() => {
     if (writingMode !== 'argumentative' || !thinkingProcessIdRef.current || submittedRef.current) return;
     const processId = thinkingProcessIdRef.current;
     const timer = setTimeout(() => {
-      reflectionSyncTimerRef.current = null;
       if (submittedRef.current) return;
       updateThinkingProcessDraft(processId, { argument_reflection: argumentReflection }).catch(() => { });
     }, 800);
-    reflectionSyncTimerRef.current = timer;
-    return () => {
-      clearTimeout(timer);
-      if (reflectionSyncTimerRef.current === timer) reflectionSyncTimerRef.current = null;
-    };
+    return () => clearTimeout(timer);
   }, [argumentReflection, writingMode]);
-
-  const saveDraftToCloud = async () => {
-    if (savingDraftRef.current || sendingToGrader) return;
-    if (!supabaseUserId || !isHistoryUserScope(supabaseUserId)) {
-      setDraftSaveStatus('error');
-      return;
-    }
-    savingDraftRef.current = true;
-    setIsSavingDraft(true);
-    setDraftSaveStatus('dirty');
-    const savedVersion = editVersionRef.current;
-    // 未到期的自动保存不应在确认保存之后再发送旧内容。
-    cancelDraftSyncTimers();
-
-    const draftsSnapshot = { ...dimensionDrafts };
-    if (flowState === 'showing_result' && activeCard) {
-      if (currentDraftRef.current.trim()) {
-        draftsSnapshot[activeCard.id] = {
-          cardId: activeCard.id,
-          dimension: activeCard.dimension,
-          userIdea: step1Inputs[activeCard.id] || '',
-          draft: currentDraftRef.current,
-          scaffoldData: scaffoldData || undefined,
-        };
-      } else {
-        delete draftsSnapshot[activeCard.id];
-      }
-      setDimensionDrafts(draftsSnapshot);
-    }
-    const snapshot = {
-      writing_mode: writingMode,
-      inspiration_cards: cards,
-      user_ideas: step1Inputs,
-      validation_results: validationResultsRef.current,
-      coaching_turns: coachingTurnsRef.current,
-      personalized_expansions: personalizedExpansions,
-      dimension_drafts: draftsSnapshot,
-      assembled_essay: assembledEssay,
-      argument_reflection: writingMode === 'argumentative' ? argumentReflection : null,
-      status: assembledEssay ? 'completed' as const : 'in_progress' as const,
-    };
-
-    try {
-      let processId = thinkingProcessIdRef.current;
-      if (!processId) {
-        const created = await createThinkingProcess(supabaseUserId, currentTopic, cards, writingMode);
-        if (!created.id || created.error) throw created.error || new Error('创建云端草稿失败');
-        if (!isHistoryUserScope(supabaseUserId)) return;
-        processId = created.id;
-        thinkingProcessIdRef.current = processId;
-        if (localThinkingHistoryIdRef.current) {
-          updateHistoryItemData(localThinkingHistoryIdRef.current, { cloudProcessId: processId });
-        }
-      }
-      if (!processId) throw new Error('未能关联云端草稿');
-      const { data, error: saveError } = await saveThinkingProcessDraftSnapshot(processId, supabaseUserId, snapshot);
-      if (saveError || !data) throw saveError || new Error('云端未确认保存');
-      if (!isHistoryUserScope(supabaseUserId)) return;
-      setDraftSavedAt(data.updated_at || new Date().toISOString());
-      if (editVersionRef.current === savedVersion) setRestoredValidationResults(snapshot.validation_results);
-      setDraftSaveStatus(editVersionRef.current === savedVersion ? 'saved' : 'dirty');
-    } catch (saveError) {
-      console.error('[ThinkingProcess] 手动保存草稿失败:', saveError);
-      if (isHistoryUserScope(supabaseUserId)) setDraftSaveStatus('error');
-    } finally {
-      savingDraftRef.current = false;
-      setIsSavingDraft(false);
-    }
-  };
-
-  const renderDraftSaveControls = () => <div className="flex flex-wrap items-center gap-3">
-    <button type="button" onClick={() => void saveDraftToCloud()} disabled={isSavingDraft || sendingToGrader}
-      className="rounded-lg border border-blue-300 bg-white px-4 py-2 text-sm font-semibold text-blue-800 hover:bg-blue-50 disabled:cursor-wait disabled:opacity-60">
-      {isSavingDraft ? '正在保存到云端…' : draftSaveStatus === 'error' ? '重试保存草稿' : '保存草稿'}
-    </button>
-    <span role="status" aria-live="polite" className={`text-xs ${draftSaveStatus === 'error' ? 'text-rose-700' : draftSaveStatus === 'saved' ? 'text-emerald-700' : 'text-slate-500'}`}>
-      {isSavingDraft ? '请等待保存完成后再离开' : draftSaveStatus === 'saved'
-        ? `已保存到云端${draftSavedAt ? ` · ${new Date(draftSavedAt).toLocaleTimeString('zh-CN')}` : ''}，可在其他设备继续写`
-        : draftSaveStatus === 'error' ? '保存失败，当前内容尚未确认写入云端，请重试'
-          : draftSaveStatus === 'dirty' ? '有新修改，离开前请再次保存' : '离开或更换设备前请先保存'}
-    </span>
-  </div>;
 
   // 按需生成 AI 范例（点击"看看AI范例"时触发）
   const handleLoadAiReference = async (section: 'intro' | 'conclusion') => {
@@ -647,7 +482,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   // 发送到作文批改
   const handleSendToGrader = async () => {
     if (!assembledEssay || !onSendToGrader || sendingToGrader) return;
-    cancelDraftSyncTimers();
     setSendingToGrader(true);
     setSubmissionError(null);
 
@@ -657,45 +491,20 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       assembledEssay.conclusion
     ].filter(p => p.trim()).join('\n\n');
 
-    if (!supabaseUserId || !fullEssay.trim()) {
-      setSubmissionError('作文内容或登录状态无效，请检查后重试。');
-      setSendingToGrader(false);
-      return;
-    }
-
-    submittedRef.current = true;
-    let processId = thinkingProcessIdRef.current;
-    try {
-      if (!processId) {
-        const created = await createThinkingProcess(supabaseUserId, currentTopic, cards, writingMode);
-        if (!created.id || created.error) throw created.error || new Error('创建写作过程失败');
-        if (!isHistoryUserScope(supabaseUserId)) return;
-        processId = created.id;
-        thinkingProcessIdRef.current = processId;
-        if (localThinkingHistoryIdRef.current) {
-          updateHistoryItemData(localThinkingHistoryIdRef.current, { cloudProcessId: processId });
-        }
-      }
-      if (!processId) throw new Error('未能关联写作过程');
-      const submitted = await submitThinkingProcess(processId, supabaseUserId, {
-        writing_mode: writingMode,
-        inspiration_cards: cards,
-        user_ideas: step1Inputs,
-        validation_results: validationResultsRef.current,
-        coaching_turns: coachingTurnsRef.current,
-        personalized_expansions: personalizedExpansions,
-        dimension_drafts: dimensionDrafts,
+    const processId = thinkingProcessIdRef.current;
+    if (writingMode === 'argumentative' && processId) {
+      submittedRef.current = true;
+      const { error } = await updateThinkingProcess(processId, {
         assembled_essay: assembledEssay,
-        argument_reflection: writingMode === 'argumentative' ? argumentReflection : null,
+        argument_reflection: argumentReflection,
+        status: 'sent_to_grader',
       });
-      if (submitted.error || !submitted.data) throw submitted.error || new Error('提交未写入云端');
-      if (!isHistoryUserScope(supabaseUserId)) return;
-    } catch (submitError) {
-      console.error('[ThinkingProcess] 发送批改失败:', submitError);
-      submittedRef.current = false;
-      setSubmissionError('写作过程未成功保存到云端，尚未发送批改。请检查网络后重试。');
-      setSendingToGrader(false);
-      return;
+      if (error) {
+        submittedRef.current = false;
+        setSendingToGrader(false);
+        setSubmissionError('写作过程保存失败，请检查网络后重试提交。');
+        return;
+      }
     }
 
     if (localThinkingHistoryIdRef.current) {
@@ -708,20 +517,21 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
         personalizedExpansions,
         assembledEssay,
         argumentReflection,
-        cloudProcessId: processId,
-        cloudStatus: 'sent_to_grader',
         submittedAt: new Date().toISOString(),
       });
     }
 
     // Supabase: 保存组合成文
-    saveAssembledEssayToSupabase(supabaseUserId, currentTopic, fullEssay, writingMode).catch(() => { });
-    const duration = Math.round((Date.now() - sessionStartRef.current) / 1000);
-    logAgentUsage(supabaseUserId, '审辨写作训练', 'writing_system', duration).catch(() => { });
+    if (supabaseUserId && fullEssay.trim()) {
+      saveAssembledEssayToSupabase(supabaseUserId, currentTopic, fullEssay, writingMode).catch(() => { });
+      // 记录使用日志（含时长）
+      const duration = Math.round((Date.now() - sessionStartRef.current) / 1000);
+      logAgentUsage(supabaseUserId, '审辨写作训练', 'writing_system', duration).catch(() => { });
+    }
 
     onSendToGrader(currentTopic, fullEssay, writingMode);
 
-    if (writingMode === 'argumentative' && processId) {
+    if (writingMode === 'argumentative' && processId && fullEssay.trim()) {
       analyzeArgumentativeCtrlScoreV2({
         topic: currentTopic,
         inspirationCards: cards,
@@ -735,7 +545,8 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
         .catch(err => console.error('[ArgumentativeCtrlV2] 分析失败，可在教师端重评:', err));
     }
 
-    if (writingMode === 'narrative' && processId) {
+    if (writingMode === 'narrative' && thinkingProcessIdRef.current && fullEssay.trim()) {
+      const processId = thinkingProcessIdRef.current;
       analyzeCtrlScore({
         topic: currentTopic,
         inspirationCards: cards,
@@ -750,12 +561,17 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       }).catch(() => { /* 静默处理，不影响提交流程 */ });
     }
 
+    // 同步组合成文内容和状态到思维过程记录
+    if (writingMode === 'narrative' && processId) {
+      updateThinkingProcess(processId, {
+        assembled_essay: assembledEssay,
+        status: 'sent_to_grader'
+      }).catch(() => { });
+    }
     setSendingToGrader(false);
   };
 
   const resetApp = () => {
-    if (savingDraftRef.current) return;
-    cancelDraftSyncTimers();
     setFlowState('input_topic');
     setCards([]);
     setAddingDimension(null);
@@ -763,8 +579,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
     setCurrentTopic('');
     setWritingMode('argumentative');
     setArgumentReflection(null);
-    setDraftSaveStatus('idle');
-    setDraftSavedAt(null);
     setSubmissionError(null);
     setSendingToGrader(false);
     submittedRef.current = false;
@@ -788,13 +602,26 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   const findRelatedThinkingProcess = async (historyRecord?: HistoryItem) => {
     if (!supabaseUserId || !historyRecord) return null;
     try {
-      const linkedId = historyRecord.dataType === 'inspiration'
-        ? (historyRecord.data as InspirationHistoryData).cloudProcessId
-        : undefined;
-      if (!linkedId) return null;
-      const { data, error } = await getThinkingProcessByIdForUser(linkedId, supabaseUserId);
-      if (error) throw error;
-      return data;
+      const { data } = await getThinkingProcessByUser(supabaseUserId);
+      const recordMode = historyRecord.dataType === 'inspiration'
+        ? (historyRecord.data as InspirationHistoryData).writingMode
+        : (historyRecord.data as ScaffoldContent).writingMode;
+      const candidates = (data || []).filter((process: any) => {
+        if (process.topic !== historyRecord.topic) return false;
+        if (!recordMode) return true;
+        const processMode = process.writing_mode === 'narrative'
+          || (Array.isArray(process.inspiration_cards) && process.inspiration_cards.some((card: any) => !!card?.narrativeRole))
+          ? 'narrative'
+          : 'argumentative';
+        return processMode === recordMode;
+      });
+      if (!candidates.length) return null;
+      return candidates.sort((a: any, b: any) => {
+        const recordTime = historyRecord.timestamp;
+        const timeA = Math.abs(new Date(a.created_at).getTime() - recordTime);
+        const timeB = Math.abs(new Date(b.created_at).getTime() - recordTime);
+        return timeA - timeB;
+      })[0];
     } catch (err) {
       console.warn('[ThinkingHistory] 恢复云端写作过程失败，改用本地记录:', err);
       return null;
@@ -802,18 +629,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   };
 
   const handleSelectHistoryItem = async (item: HistoryItem) => {
-    if (item.dataType === 'inspiration' && (item.data as InspirationHistoryData).cloudProcessId) {
-      if (!supabaseUserId) return;
-      const cloudProcessId = (item.data as InspirationHistoryData).cloudProcessId!;
-      const { data, error } = await getThinkingProcessByIdForUser(cloudProcessId, supabaseUserId);
-      if (error || !data) {
-        setHistoryError('这条云端记录暂时无法打开，请稍后重试。');
-        return;
-      }
-      resumeProcess(data);
-      setIsHistoryOpen(false);
-      return;
-    }
     if (item.dataType === 'scaffold') {
       const scaffold = item.data as ScaffoldContent;
       const relatedInspiration = historyItems
@@ -868,8 +683,8 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       setAssembledEssay(inspiration?.assembledEssay || null);
       setArgumentReflection(scaffold.writingMode === 'narrative' ? null : inspiration?.argumentReflection || null);
       submittedRef.current = false;
-      thinkingProcessIdRef.current = cloudProcess?.status === 'sent_to_grader' ? null : cloudProcess?.id || null;
-      localThinkingHistoryIdRef.current = relatedInspiration && !relatedInspiration.id.startsWith('cloud:') ? relatedInspiration.id : null;
+      thinkingProcessIdRef.current = cloudProcess?.id || null;
+      localThinkingHistoryIdRef.current = relatedInspiration?.id || null;
       if (matchingCard && !restoredInputs[matchingCard.id]) {
         restoredInputs[matchingCard.id] = scaffold.userIdea || '';
       }
@@ -923,7 +738,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
       setScaffoldData(null);
       setActiveCard(null);
       currentDraftRef.current = '';
-      thinkingProcessIdRef.current = cloudProcess?.status === 'sent_to_grader' ? null : cloudProcess?.id || null;
+      thinkingProcessIdRef.current = cloudProcess?.id || null;
       localThinkingHistoryIdRef.current = item.id;
       setFlowState('selecting_card');
       setIsHistoryOpen(false);
@@ -931,33 +746,21 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
   };
 
   const handleDeleteHistoryItem = (id: string) => {
-    if (id.startsWith('cloud:')) return;
     deleteFromHistory(id);
-    void refreshHistory();
+    refreshHistory();
   };
 
   return (
     <div className="animate-fade-in-up">
       {/* Module Toolbar */}
       <div className="flex justify-end gap-3 mb-6 no-print">
-        {['selecting_card', 'showing_result', 'assembling_essay'].includes(flowState) && (
-          <>
-            <span role="status" aria-live="polite" className={`self-center text-xs ${draftSaveStatus === 'error' ? 'text-rose-700' : draftSaveStatus === 'saved' ? 'text-emerald-700' : 'text-slate-500'}`}>
-              {isSavingDraft ? '正在保存，请稍候' : draftSaveStatus === 'saved' ? '已保存到云端' : draftSaveStatus === 'error' ? '保存失败，请重试' : draftSaveStatus === 'dirty' ? '有新修改' : ''}
-            </span>
-            <button type="button" onClick={() => void saveDraftToCloud()} disabled={isSavingDraft || sendingToGrader}
-              className="rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-sm font-medium text-blue-800 hover:bg-blue-50 disabled:opacity-60">
-              {isSavingDraft ? '正在保存…' : draftSaveStatus === 'error' ? '重试保存草稿' : '保存草稿'}
-            </button>
-          </>
-        )}
         <button
           onClick={() => setIsHistoryOpen(true)}
           className="text-sm font-medium text-slate-500 hover:text-blue-900 transition-colors flex items-center gap-1 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm"
         >
           <UiIcon name="folder" size={16} />历史记录
         </button>
-        <button onClick={resetApp} disabled={isSavingDraft} className="text-sm font-medium text-white bg-blue-900 px-3 py-1.5 rounded-lg hover:bg-blue-950 disabled:opacity-50 transition-colors shadow-sm">
+        <button onClick={resetApp} className="text-sm font-medium text-white bg-blue-900 px-3 py-1.5 rounded-lg hover:bg-blue-950 transition-colors shadow-sm">
           + 新题目
         </button>
       </div>
@@ -1040,12 +843,10 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
             dimensionDrafts={dimensionDrafts}
             onAssembleEssay={handleAssembleEssay}
             onValidationComplete={handleValidationComplete}
-            onPendingAnswerChange={handlePendingAnswerChange}
             initialValidationResults={restoredValidationResults}
             onAddDimension={handleAddDimension}
             addingDimension={addingDimension}
           />
-          <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4">{renderDraftSaveControls()}</div>
         </div>
       )}
 
@@ -1058,7 +859,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
           onBack={handleBackToDimensions}
           initialDraft={activeCard ? (dimensionDrafts[activeCard.id]?.draft || '') : ''}
           onDraftChange={handleDraftChange}
-          saveDraftControls={renderDraftSaveControls()}
         />
       )}
 
@@ -1104,7 +904,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
 
                   <textarea
                     value={assembledEssay.introduction}
-                    onChange={(e) => { markDraftChanged(); setAssembledEssay(prev => prev ? { ...prev, introduction: e.target.value } : null); }}
+                    onChange={(e) => setAssembledEssay(prev => prev ? { ...prev, introduction: e.target.value } : null)}
                     className="w-full p-4 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none resize-none text-slate-700 leading-relaxed text-sm min-h-[100px]"
                     placeholder="Try writing your introduction here..."
                   />
@@ -1147,7 +947,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                     <textarea
                       value={para.draft}
                       onChange={(e) => {
-                        markDraftChanged();
                         setAssembledEssay(prev => {
                           if (!prev) return null;
                           const newBody = [...prev.bodyParagraphs];
@@ -1181,7 +980,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
 
                   <textarea
                     value={assembledEssay.conclusion}
-                    onChange={(e) => { markDraftChanged(); setAssembledEssay(prev => prev ? { ...prev, conclusion: e.target.value } : null); }}
+                    onChange={(e) => setAssembledEssay(prev => prev ? { ...prev, conclusion: e.target.value } : null)}
                     className="w-full p-4 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none resize-none text-slate-700 leading-relaxed text-sm min-h-[100px]"
                     placeholder="Try writing your conclusion here..."
                   />
@@ -1218,7 +1017,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                 <textarea
                   id="argument-reflection"
                   value={argumentReflection?.text || ''}
-                  onChange={event => { markDraftChanged(); setArgumentReflection({ text: event.target.value, updatedAt: new Date().toISOString() }); }}
+                  onChange={event => setArgumentReflection({ text: event.target.value, updatedAt: new Date().toISOString() })}
                   className="w-full min-h-[86px] rounded-lg border border-blue-200 bg-white p-3 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-200"
                   placeholder="例如：我保留了原观点，因为……；我补充了……，因为原来的依据不足以说明……"
                 />
@@ -1247,7 +1046,7 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                 {onSendToGrader && (
                   <button
                     onClick={handleSendToGrader}
-                    disabled={sendingToGrader || isSavingDraft}
+                    disabled={sendingToGrader}
                     className="px-6 py-3 bg-blue-900 hover:bg-blue-950 disabled:opacity-50 text-white rounded-xl font-bold text-sm shadow-md transition-colors flex items-center gap-2"
                   >
                     <UiIcon name="arrowRight" size={18} />{sendingToGrader ? '正在保存写作过程...' : '发送到作文批改'}
@@ -1255,7 +1054,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
                 )}
               </div>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-4">{renderDraftSaveControls()}</div>
             {submissionError && <p role="alert" className="text-sm text-rose-700">{submissionError}</p>}
           </div>
         </div>
@@ -1280,8 +1078,6 @@ const SocraticCoach: React.FC<SocraticCoachProps> = ({ onSendToGrader, supabaseU
         isOpen={isHistoryOpen}
         onClose={() => setIsHistoryOpen(false)}
         history={historyItems}
-        isLoading={historyLoading}
-        error={historyError}
         onSelect={handleSelectHistoryItem}
         onDelete={handleDeleteHistoryItem}
         title="Thinking History"

@@ -196,19 +196,18 @@ export interface BatchWritingScope {
   toDate?: string
 }
 
-export const normalizeWritingTopic = (value: string) => value.normalize('NFKC').replace(/[“”‘’]/g, "'").replace(/\s+/g, ' ').replace(/\s*([,:;!?。！？])\s*/g, '$1').replace(/[.!?。！？]+$/, '').trim().toLocaleLowerCase()
-
 const applyBatchWritingScope = (query: any, scope: BatchWritingScope) => {
   query = query.in('topic', scope.topicVariants?.length ? scope.topicVariants : [scope.topic])
-  if (scope.fromDate) query = query.gte('created_at', `${scope.fromDate}T00:00:00.000Z`)
+  if (scope.fromDate) query = query.gte('created_at', new Date(`${scope.fromDate}T00:00:00`).toISOString())
   if (scope.toDate) {
-    const nextDay = new Date(Date.parse(`${scope.toDate}T00:00:00.000Z`) + 24 * 60 * 60 * 1000)
+    const nextDay = new Date(`${scope.toDate}T00:00:00`)
+    nextDay.setDate(nextDay.getDate() + 1)
     query = query.lt('created_at', nextDay.toISOString())
   }
   return query
 }
 
-/** 列出班级内已送批改且有成文记录的题目。 */
+/** 列出班级内有成文记录的题目；议论文仅显示已经送批改的写作。 */
 export const getBatchWritingTopics = async (className: string, mode: 'narrative' | 'argumentative') => {
   const { data: students, error: studentError } = await supabase
     .from('wc_users')
@@ -218,6 +217,7 @@ export const getBatchWritingTopics = async (className: string, mode: 'narrative'
   if (studentError || !students?.length) return { data: [] as Array<{ topic: string; count: number; variants: string[]; batches: Array<{ key: string; label: string; count: number }> }>, error: studentError }
 
   const studentIds = students.map(student => student.id)
+  const normalizeTopic = (value: string) => value.normalize('NFKC').replace(/[“”‘’]/g, "'").replace(/\s+/g, ' ').replace(/\s*([,:;!?。！？])\s*/g, '$1').replace(/[.!?。！？]+$/, '').trim().toLocaleLowerCase()
   const grouped = new Map<string, { topic: string; count: number; variants: Map<string, number>; batches: Map<string, number> }>()
   for (let offset = 0; ; offset += 500) {
     let query = supabase
@@ -225,23 +225,22 @@ export const getBatchWritingTopics = async (className: string, mode: 'narrative'
       .select('topic, writing_mode, inspiration_cards, created_at')
       .in('user_id', studentIds)
       .not('assembled_essay', 'is', null)
-      .eq('status', 'sent_to_grader')
       .order('created_at', { ascending: false })
       .range(offset, offset + 499)
+    if (mode === 'argumentative') query = query.eq('status', 'sent_to_grader')
     const { data: page, error } = await query
     if (error) return { data: [] as Array<{ topic: string; count: number; variants: string[]; batches: Array<{ key: string; label: string; count: number }> }>, error }
     for (const process of page || []) {
       if (isArgumentativeProcess(process) !== (mode === 'argumentative')) continue
       if (!process.topic?.trim()) continue
-      const rawTopic = process.topic
-      const original = rawTopic.trim()
-      const entry = grouped.get(normalizeWritingTopic(original)) || { topic: original, count: 0, variants: new Map(), batches: new Map() }
+      const original = process.topic.trim()
+      const entry = grouped.get(normalizeTopic(original)) || { topic: original, count: 0, variants: new Map(), batches: new Map() }
       entry.count += 1
-      entry.variants.set(rawTopic, (entry.variants.get(rawTopic) || 0) + 1)
+      entry.variants.set(original, (entry.variants.get(original) || 0) + 1)
       const batchKey = typeof process.created_at === 'string' ? process.created_at.slice(0, 10) : '未标注日期'
       entry.batches.set(batchKey, (entry.batches.get(batchKey) || 0) + 1)
-      if ((entry.variants.get(rawTopic) || 0) > (entry.variants.get(entry.topic) || 0)) entry.topic = original
-      grouped.set(normalizeWritingTopic(original), entry)
+      if ((entry.variants.get(original) || 0) > (entry.variants.get(entry.topic) || 0)) entry.topic = original
+      grouped.set(normalizeTopic(original), entry)
     }
     if (!page || page.length < 500) break
   }
@@ -252,100 +251,6 @@ export const getBatchWritingTopics = async (className: string, mode: 'narrative'
     batches: [...entry.batches.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([key, count]) => ({ key, label: key === '未标注日期' ? key : `${key}（${count} 篇）`, count })),
   })).sort((a, b) => b.count - a.count || a.topic.localeCompare(b.topic, 'zh-CN'))
   return { data, error: null }
-}
-
-/** 教师导出专用：只读取指定班级、文体、题目和日期范围内的成文过程。 */
-export const getEvidenceExportProcesses = async (
-  className: string,
-  mode: 'narrative' | 'argumentative',
-  scope: BatchWritingScope,
-) => {
-  if (!className.trim() || !scope.topic.trim()) return { data: [] as any[], students: [] as any[], coverage: null, error: new Error('请先选择班级和写作题目') }
-  const { data: students, error: studentError } = await supabase
-    .from('wc_users')
-    .select('id, name, student_id, class_name')
-    .eq('class_name', className)
-    .in('role', ['student', 'external_student'])
-  if (studentError || !students?.length) return { data: [] as any[], students: students || [], coverage: null, error: studentError }
-
-  const selectedTopicKey = normalizeWritingTopic(scope.topic)
-  const inDateRange = (date: unknown) => {
-    const day = typeof date === 'string' ? date.slice(0, 10) : ''
-    return (!scope.fromDate || day >= scope.fromDate) && (!scope.toDate || day <= scope.toDate)
-  }
-  const processes: any[] = []
-  for (let offset = 0; ; offset += 500) {
-    const query = supabase
-      .from('wc_thinking_process')
-      .select('*')
-      .in('user_id', students.map(student => student.id))
-      .eq('status', 'sent_to_grader')
-    const { data: page, error } = await query
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .range(offset, offset + 499)
-    if (error) return { data: [] as any[], students, coverage: null, error }
-    processes.push(...(page || []).filter(process => normalizeWritingTopic(process.topic || '') === selectedTopicKey && inDateRange(process.created_at)))
-    if (!page || page.length < 500) break
-  }
-  const sentProcesses = processes.filter(process => isArgumentativeProcess(process) === (mode === 'argumentative'))
-  const selected = sentProcesses.filter(process => !!process.assembled_essay)
-  const grades: any[] = []
-  for (let offset = 0; ; offset += 500) {
-    const { data: page, error } = await supabase
-      .from('wc_essay_grades')
-      .select('id, user_id, topic, essay, writing_mode, created_at, total_score, general_comment, critiques')
-      .in('user_id', students.map(student => student.id))
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .range(offset, offset + 499)
-    if (error) return { data: [] as any[], students, coverage: null, error }
-    grades.push(...(page || []).filter(grade => normalizeWritingTopic(grade.topic || '') === selectedTopicKey))
-    if (!page || page.length < 500) break
-  }
-  const essayKey = (value: unknown) => typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
-  const assembledText = (essay: any) => [essay?.introduction, ...(Array.isArray(essay?.bodyParagraphs) ? essay.bodyParagraphs.map((part: any) => part?.draft) : []), essay?.conclusion]
-    .filter((part): part is string => typeof part === 'string' && !!part.trim()).join(' ')
-  const gradeByEssay = new Map<string, any>()
-  for (const grade of grades) {
-    if (grade.writing_mode !== mode && !(mode === 'argumentative' && !grade.writing_mode)) continue
-    const text = essayKey(grade.essay)
-    if (!text) continue
-    const key = JSON.stringify([grade.user_id, normalizeWritingTopic(grade.topic || ''), text])
-    if (!gradeByEssay.has(key)) gradeByEssay.set(key, grade)
-  }
-  const scopedGrades = grades.filter(grade => {
-    if (grade.writing_mode !== mode && !(mode === 'argumentative' && !grade.writing_mode)) return false
-    return inDateRange(grade.created_at)
-  })
-  const sentStudentIds = new Set<string>([
-    ...sentProcesses.map(process => String(process.user_id)),
-    ...scopedGrades.map(grade => String(grade.user_id)),
-  ])
-  const completeStudentIds = new Set(selected.map(process => String(process.user_id)))
-  const missingStudents = students.filter(student => sentStudentIds.has(String(student.id)) && !completeStudentIds.has(String(student.id)))
-  return {
-    data: selected.map(process => {
-      const key = JSON.stringify([process.user_id, normalizeWritingTopic(process.topic || ''), essayKey(assembledText(process.assembled_essay))])
-      const grade = gradeByEssay.get(key)
-      return {
-        ...process,
-        essay_grade: grade ? {
-          totalScore: grade.total_score,
-          generalComment: grade.general_comment,
-          critiques: grade.critiques,
-          gradedAt: grade.created_at,
-        } : null,
-      }
-    }),
-    students,
-    coverage: {
-      sentStudents: sentStudentIds.size,
-      completeStudents: completeStudentIds.size,
-      missingStudents,
-    },
-    error: null,
-  }
 }
 
 export const getBatchCtrlCandidates = async (
@@ -996,54 +901,13 @@ export const logAgentUsage = async (
  * 获取所有学生列表
  */
 export const getAllStudents = async () => {
-  const students: any[] = []
-  for (let offset = 0; ; offset += 500) {
-    const { data, error } = await supabase
-      .from('wc_users')
-      .select('*')
-      .in('role', ['student', 'external_student'])
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .range(offset, offset + 499)
-    if (error) return { data: students, error }
-    students.push(...(data || []))
-    if (!data || data.length < 500) break
-  }
-  return { data: students, error: null }
-}
+  const { data, error } = await supabase
+    .from('wc_users')
+    .select('*')
+    .in('role', ['student', 'external_student'])
+    .order('created_at', { ascending: false })
 
-/** 已保存的批改结果，用于兼容直接提交批改、没有写作过程记录的作文。 */
-export const getEssaySubmissionRecords = async () => {
-  const records: any[] = []
-  for (let offset = 0; ; offset += 500) {
-    const { data, error } = await supabase
-      .from('wc_essay_grades')
-      .select('id, user_id, topic, writing_mode, created_at, wc_users!inner(name, student_id, class_name)')
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .range(offset, offset + 499)
-    if (error) return { data: records, error }
-    records.push(...(data || []))
-    if (!data || data.length < 500) break
-  }
-  return { data: records, error: null }
-}
-
-/** 与学生档案使用同一 status 字段，读取全部写作过程以区分已送批改和进行中。 */
-export const getWritingProcessStatuses = async () => {
-  const records: any[] = []
-  for (let offset = 0; ; offset += 500) {
-    const { data, error } = await supabase
-      .from('wc_thinking_process')
-      .select('id, user_id, topic, writing_mode, inspiration_cards, status, created_at, wc_users!inner(name, student_id, class_name)')
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .range(offset, offset + 499)
-    if (error) return { data: records, error }
-    records.push(...(data || []))
-    if (!data || data.length < 500) break
-  }
-  return { data: records, error: null }
+  return { data, error }
 }
 
 /**
@@ -1149,37 +1013,18 @@ export const getStudentDetail = async (userId: string) => {
  * 获取指定学生的所有作文批改记录
  */
 export const getEssayGradesByUser = async (userId: string) => {
-  const records: any[] = []
-  for (let offset = 0; ; offset += 500) {
-    const { data, error } = await supabase
-      .from('wc_essay_grades')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .range(offset, offset + 499)
-    if (error) return { data: records, error }
-    records.push(...(data || []))
-    if (!data || data.length < 500) break
-  }
-  return { data: records, error: null }
+  const { data, error } = await supabase
+    .from('wc_essay_grades')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+
+  return { data, error }
 }
 
 // ==========================================
 // 8. 思维过程数据（wc_thinking_process）
 // ==========================================
-
-// 同一篇写作的自动保存、手动保存和提交依次写入，避免旧请求晚到覆盖新快照。
-const thinkingProcessWriteQueue = new Map<string, Promise<unknown>>()
-const serializeThinkingProcessWrite = <T>(processId: string, write: () => Promise<T>): Promise<T> => {
-  const previous = thinkingProcessWriteQueue.get(processId) || Promise.resolve()
-  const current = previous.catch(() => undefined).then(write)
-  thinkingProcessWriteQueue.set(processId, current)
-  void current.finally(() => {
-    if (thinkingProcessWriteQueue.get(processId) === current) thinkingProcessWriteQueue.delete(processId)
-  }).catch(() => undefined)
-  return current
-}
 
 /**
  * 创建思维过程记录（学生提交新 topic 时调用）
@@ -1237,13 +1082,11 @@ export const updateThinkingProcess = async (
     status?: 'in_progress' | 'completed' | 'sent_to_grader'
   }
 ) => {
-  return serializeThinkingProcessWrite(processId, async () => {
   try {
     const { error } = await supabase
       .from('wc_thinking_process')
       .update(updates)
       .eq('id', processId)
-      .in('status', ['in_progress', 'completed'])
 
     if (error) {
       console.error('[Supabase] 更新思维过程记录失败:', error)
@@ -1253,105 +1096,35 @@ export const updateThinkingProcess = async (
     console.error('[Supabase] 更新思维过程记录异常:', err)
     return { error: err }
   }
-  })
 }
-
-/** 提交前确认该写作过程确实属于当前学生，并把最终快照和已送批改状态一起写入。 */
-export const submitThinkingProcess = async (processId: string, userId: string, snapshot: {
-  writing_mode: WritingMode
-  inspiration_cards: any[]
-  user_ideas: Record<string, string>
-  validation_results: Record<string, any>
-  coaching_turns: Record<string, any[]>
-  personalized_expansions: Record<string, string[]>
-  dimension_drafts: Record<string, any>
-  assembled_essay: any
-  argument_reflection: ArgumentReflection | null
-}) => {
-  return serializeThinkingProcessWrite(processId, async () => {
-  try {
-    const { data, error } = await supabase
-      .from('wc_thinking_process')
-      .update({ ...snapshot, status: 'sent_to_grader' })
-      .eq('id', processId)
-      .eq('user_id', userId)
-      .in('status', ['in_progress', 'completed'])
-      .select('id, status')
-      .maybeSingle()
-    if (error) return { data: null, error }
-    if (!data) return { data: null, error: new Error('未找到当前账号可提交的写作草稿，请刷新后重试。') }
-    return { data, error: null }
-  } catch (error) {
-    return { data: null, error }
-  }
-  })
-}
-
-/** 手动保存必须由数据库确认更新了当前学生的未提交记录。 */
-export const saveThinkingProcessDraftSnapshot = async (processId: string, userId: string, snapshot: {
-  writing_mode: WritingMode
-  inspiration_cards: any[]
-  user_ideas: Record<string, string>
-  validation_results: Record<string, any>
-  coaching_turns: Record<string, any[]>
-  personalized_expansions: Record<string, string[]>
-  dimension_drafts: Record<string, any>
-  assembled_essay: any
-  argument_reflection: ArgumentReflection | null
-  status: 'in_progress' | 'completed'
-}) => serializeThinkingProcessWrite(processId, async () => {
-  try {
-    const { data, error } = await supabase
-      .from('wc_thinking_process')
-      .update(snapshot)
-      .eq('id', processId)
-      .eq('user_id', userId)
-      .in('status', ['in_progress', 'completed'])
-      .select('id, updated_at')
-      .maybeSingle()
-    if (error) return { data: null, error }
-    if (!data) return { data: null, error: new Error('未找到当前账号可保存的写作草稿。') }
-    return { data, error: null }
-  } catch (error) {
-    return { data: null, error }
-  }
-})
 
 /** 延迟自动保存只允许写入未提交记录，避免覆盖提交快照。 */
 export const updateThinkingProcessDraft = async (
   processId: string,
   updates: { assembled_essay?: any; argument_reflection?: ArgumentReflection | null; status?: 'completed' }
 ) => {
-  return serializeThinkingProcessWrite(processId, async () => {
   const { error } = await supabase
     .from('wc_thinking_process')
     .update(updates)
     .eq('id', processId)
     .in('status', ['in_progress', 'completed'])
   return { error }
-  })
 }
 
 /**
  * 获取所有思维过程记录（教师端）
  */
 export const getAllThinkingProcesses = async (limit: number = 200) => {
-  const pageSize = 500
-  const rows: any[] = []
-  for (let offset = 0; offset < limit; offset += pageSize) {
-    const { data, error } = await supabase
-      .from('wc_thinking_process')
-      .select(`
-        *,
-        wc_users!inner(name, student_id)
-      `)
-      .order('created_at', { ascending: false })
-      .range(offset, Math.min(offset + pageSize - 1, limit - 1))
-    if (error) return { data: rows, error }
-    rows.push(...(data || []))
-    if (!data || data.length < pageSize) break
-  }
-  return { data: rows, error: null }
+  const { data, error } = await supabase
+    .from('wc_thinking_process')
+    .select(`
+      *,
+      wc_users!inner(name, student_id)
+    `)
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  return { data, error }
 }
 
 /**
@@ -1652,29 +1425,12 @@ export const deleteCollocationBankEntry = async (entryId: string) => {
  * 获取指定学生的思维过程记录
  */
 export const getThinkingProcessByUser = async (userId: string) => {
-  const records: any[] = []
-  for (let offset = 0; ; offset += 500) {
-    const { data, error } = await supabase
-      .from('wc_thinking_process')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .range(offset, offset + 499)
-    if (error) return { data: records, error }
-    records.push(...(data || []))
-    if (!data || data.length < 500) break
-  }
-  return { data: records, error: null }
-}
-
-export const getThinkingProcessByIdForUser = async (processId: string, userId: string) => {
   const { data, error } = await supabase
     .from('wc_thinking_process')
     .select('*')
-    .eq('id', processId)
     .eq('user_id', userId)
-    .maybeSingle()
+    .order('created_at', { ascending: false })
+
   return { data, error }
 }
 

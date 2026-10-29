@@ -1,14 +1,12 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { getAllLearningStats, LearningStats, getHistory, getHistoryStorageKey, getAggregatedUserErrors, getAggregatedUserCollocations, getAggregatedUserVocab } from '../services/storageService';
 import { HistoryItem, ScaffoldContent, EssayHistoryData, InspirationHistoryData, AggregatedError, CritiqueCategory, EssayGradeResult, Tab } from '../types';
 import ResultsDisplay from '../components/ResultsDisplay';
 import GradingReport from '../components/GradingReport';
-import { getThinkingProcessByUser, getEssayGradesByUser, getVocabularyBank, deleteVocabBankEntry, VocabBankEntry, upsertVocabularyBank, getCollocationBank, deleteCollocationBankEntry, CollocationBankEntry, upsertCollocationBank, saveArgumentativeCtrlScoreV2 } from '../services/supabaseDataService';
+import { getStudentDetail, getVocabularyBank, deleteVocabBankEntry, VocabBankEntry, getCollocationBank, deleteCollocationBankEntry, CollocationBankEntry, saveArgumentativeCtrlScoreV2 } from '../services/supabaseDataService';
 import { analyzeArgumentativeCtrlScoreV2 } from '../services/geminiService';
 import { computeMilestones } from '../services/milestones';
 import UiIcon, { type UiIconName } from '../components/UiIcon';
 import { ARGUMENTATIVE_CTRL_DIMS, isArgumentativeProcess, type ArgumentativeCtrlV2 } from '../services/argumentativeCtrlRubric';
-import { downloadFinalEssayRecord } from '../services/writingEvidenceExport';
 
 /** 学习中心展示用：与 Supabase ctrl_score JSON 对齐的宽松类型（避免依赖 LLM 运行时模块） */
 interface CtrlScoreStudentView {
@@ -66,6 +64,7 @@ const CTRL_DIMS_NARRATIVE_LEGACY = [
 interface ProfileCenterProps {
   isActive: boolean;
   onNavigate: (path: string) => void;
+  userId?: string;
 }
 
 // --- 1. 外部组件定义 (防止 undefined 报错) ---
@@ -474,14 +473,12 @@ const DimensionTrendMini: React.FC<{
 
 // --- 2. 主组件 (ProfileCenter) ---
 
-const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) => {
+const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate, userId }) => {
   // State
-  const [stats, setStats] = useState<LearningStats>({ socraticCount: 0, graderCount: 0, drillCount: 0 });
-  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
   const [cloudHistoryItems, setCloudHistoryItems] = useState<HistoryItem[]>([]);
+  const [cloudHistoryError, setCloudHistoryError] = useState('');
   const [recentCollocations, setRecentCollocations] = useState<CollocationBankEntry[]>([]);
   const [collocationBankLoading, setCollocationBankLoading] = useState(false);
-  const [recentErrors, setRecentErrors] = useState<AggregatedError[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewingItem, setViewingItem] = useState<HistoryItem | null>(null);
 
@@ -515,6 +512,38 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
   const [remoteEssayScores, setRemoteEssayScores] = useState<{ created_at: string; total_score: number }[]>([]);
 
   // Computed Logic
+  const mergedHistoryItems = useMemo(() => {
+    // 学生档案只展示 Supabase 按当前账号 user_id 读取的记录；本机历史不参与统计或展示。
+    return [...cloudHistoryItems].sort((a, b) => b.timestamp - a.timestamp);
+  }, [cloudHistoryItems]);
+
+  const stats = useMemo(() => mergedHistoryItems.reduce((summary, item) => {
+    if (item.dataType === 'inspiration') summary.socraticCount += 1;
+    else if (item.dataType === 'essay_grade') summary.graderCount += 1;
+    else if (item.dataType === 'drill') summary.drillCount += 1;
+    return summary;
+  }, { socraticCount: 0, graderCount: 0, drillCount: 0 }), [mergedHistoryItems]);
+
+  const recentErrors = useMemo(() => {
+    const errors: AggregatedError[] = [];
+    for (const item of mergedHistoryItems) {
+      if (item.dataType !== 'essay_grade') continue;
+      const data = item.data as EssayHistoryData;
+      (Array.isArray(data.result?.critiques) ? data.result.critiques : []).forEach(critique => {
+        if (critique.severity !== 'critical' && critique.severity !== 'general') return;
+        errors.push({
+          original: critique.original,
+          context: critique.context,
+          revised: critique.revised,
+          category: critique.category,
+          explanation: critique.explanation,
+          severity: critique.severity,
+        });
+      });
+    }
+    return errors.slice(0, 20);
+  }, [mergedHistoryItems]);
+
   const errorStats = useMemo(() => {
     try {
       const defaultConfig = { color: 'text-slate-600', bg: 'bg-slate-50', border: 'border-slate-100', ring: 'ring-slate-200', icon: '📝', label: '其他' };
@@ -544,7 +573,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
 
   const essayHistory = useMemo(() => {
     try {
-      return historyItems
+      return mergedHistoryItems
         .filter(item => {
           if (item.dataType !== 'essay_grade') return false;
           const data = item.data as EssayHistoryData;
@@ -555,25 +584,19 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
       console.error('[ProfileCenter] essayHistory computation failed:', err);
       return [];
     }
-  }, [historyItems]);
+  }, [mergedHistoryItems]);
 
   const activityHistory = useMemo(() => {
-    const cloudProcessIds = new Set(cloudHistoryItems
-      .filter(item => item.dataType === 'inspiration')
-      .map(item => (item.data as InspirationHistoryData).cloudProcessId));
-    const cloudGrades = cloudHistoryItems.filter(item => item.dataType === 'essay_grade');
-    const localOnly = historyItems.filter(item => {
-      if (item.dataType === 'inspiration' && cloudProcessIds.has((item.data as InspirationHistoryData).cloudProcessId)) return false;
-      if (item.dataType === 'essay_grade') {
-        const essay = (item.data as EssayHistoryData).essay;
-        return !cloudGrades.some(remote => remote.topic === item.topic
-          && (remote.data as EssayHistoryData).essay === essay
-          && Math.abs(remote.timestamp - item.timestamp) < 300000);
-      }
-      return true;
-    });
-    return [...cloudHistoryItems, ...localOnly].sort((a, b) => b.timestamp - a.timestamp);
-  }, [cloudHistoryItems, historyItems]);
+    const grades = mergedHistoryItems.filter(item => item.dataType === 'essay_grade');
+    return mergedHistoryItems.filter(item => {
+      if (item.dataType === 'scaffold') return false;
+      if (item.dataType !== 'inspiration') return true;
+      const process = item.data as InspirationHistoryData;
+      if (process.cloudStatus !== 'sent_to_grader') return true;
+      return !grades.some(grade => grade.topic.trim().toLocaleLowerCase() === item.topic.trim().toLocaleLowerCase()
+        && Math.abs(grade.timestamp - item.timestamp) <= 24 * 60 * 60 * 1000);
+    }).sort((a, b) => b.timestamp - a.timestamp);
+  }, [mergedHistoryItems]);
 
   /** 首次 vs 最新写作分数：优先本地批改历史；不足 2 条时用 Supabase wc_essay_grades */
   const writingGrowthComparison = useMemo(() => {
@@ -908,117 +931,29 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
   };
 
   // Effects & Data Loading
-  const refreshData = useCallback(() => {
-    try {
-      setStats(getAllLearningStats());
-      setHistoryItems(getHistory());
-      setRecentErrors(getAggregatedUserErrors(20));
-    } catch (err) {
-      console.error('[ProfileCenter] Failed to load data:', err);
-      setStats({ socraticCount: 0, graderCount: 0, drillCount: 0 });
-      setHistoryItems([]);
-      setRecentErrors([]);
-    }
-    setLoading(false);
-  }, []);
-
   useEffect(() => {
     if (!isActive) return;
-    refreshData();
+    setLoading(true);
     // 从 Supabase 加载 CTRL 审辨信度历史 & 词汇银行
     try {
-      const saved = localStorage.getItem('cet_student_user');
-      if (saved) {
-        const user = JSON.parse(saved);
-        if (user?.id) {
-          // 加载词汇银行（含一次性 localStorage 迁移）
+      if (userId) {
+          // 加载当前账号的云端词汇；不自动迁移归属不明的旧本机历史
           setVocabBankLoading(true);
-          const migrateAndLoadVocab = async () => {
-            const VOCAB_MIGRATE_KEY = `cet_vocab_migrated_${user.id}`;
-            if (!localStorage.getItem(VOCAB_MIGRATE_KEY)) {
-              // 从 localStorage scaffold 历史中读取全量词汇
-              const legacyVocab = getAggregatedUserVocab(500);
-              if (legacyVocab.length > 0) {
-                // 旧数据没有 topic，统一标记为"历史训练"
-                await upsertVocabularyBank(user.id, legacyVocab, '历史训练').catch(() => {});
-              }
-              localStorage.setItem(VOCAB_MIGRATE_KEY, '1');
-            }
-            const { data } = await getVocabularyBank(user.id, 200);
-            setVocabBank(data || []);
-          };
-          migrateAndLoadVocab().catch(() => setVocabBank([])).finally(() => setVocabBankLoading(false));
+          getVocabularyBank(userId, 200)
+            .then(({ data }) => setVocabBank(data || []))
+            .catch(() => setVocabBank([]))
+            .finally(() => setVocabBankLoading(false));
 
-          // 加载搭配银行（含一次性 localStorage 迁移）
+          // 加载当前账号的云端搭配；不自动迁移归属不明的旧本机历史
           setCollocationBankLoading(true);
-          const migrateAndLoadCollocations = async () => {
-            const MIGRATE_KEY = `cet_collocation_migrated_${user.id}`;
-            if (!localStorage.getItem(MIGRATE_KEY)) {
-              // 读取 localStorage 中的历史搭配（不限数量）
-              const legacyCols = getAggregatedUserCollocations(500);
-              if (legacyCols.length > 0) {
-                // 按话题分组批量上传
-                const byTopic = new Map<string, { en: string; zh: string }[]>();
-                legacyCols.forEach(c => {
-                  const t = c.topic || '历史训练';
-                  if (!byTopic.has(t)) byTopic.set(t, []);
-                  byTopic.get(t)!.push({ en: c.en, zh: c.zh });
-                });
-                for (const [topic, cols] of byTopic.entries()) {
-                  await upsertCollocationBank(user.id, cols, topic).catch(() => {});
-                }
-              }
-              localStorage.setItem(MIGRATE_KEY, '1');
-            }
-            const { data } = await getCollocationBank(user.id, 200);
-            setRecentCollocations(data || []);
-          };
-          migrateAndLoadCollocations().catch(() => setRecentCollocations([])).finally(() => setCollocationBankLoading(false));
+          getCollocationBank(userId, 200)
+            .then(({ data }) => setRecentCollocations(data || []))
+            .catch(() => setRecentCollocations([]))
+            .finally(() => setCollocationBankLoading(false));
 
-          Promise.all([
-            getThinkingProcessByUser(user.id),
-            getEssayGradesByUser(user.id),
-          ]).then(([tpRes, essayRes]) => {
-            const processHistory: HistoryItem[] = (tpRes.data || []).map((process: any) => ({
-              id: `cloud-process:${process.id}`,
-              timestamp: new Date(process.created_at).getTime() || 0,
-              topic: process.topic || '',
-              dataType: 'inspiration',
-              data: {
-                cards: Array.isArray(process.inspiration_cards) ? process.inspiration_cards : [],
-                userInputs: process.user_ideas || {},
-                writingMode: process.writing_mode === 'narrative' ? 'narrative' : 'argumentative',
-                cloudProcessId: process.id,
-                cloudStatus: process.status,
-              } as InspirationHistoryData,
-            }));
-            const gradeHistory: HistoryItem[] = (essayRes.data || []).map((grade: any) => ({
-              id: `cloud-grade:${grade.id}`,
-              timestamp: new Date(grade.created_at).getTime() || 0,
-              topic: grade.topic || '',
-              dataType: 'essay_grade',
-              data: {
-                essay: grade.essay || '',
-                writingMode: grade.writing_mode === 'narrative' ? 'narrative' : 'argumentative',
-                result: {
-                  totalScore: grade.total_score,
-                  subScores: {
-                    content: grade.content_score,
-                    organization: grade.organization_score,
-                    proficiency: grade.proficiency_score,
-                    clarity: grade.clarity_score,
-                  },
-                  generalComment: grade.general_comment || '',
-                  issueOverview: { critical: [], general: [], minor: [] },
-                  critiques: grade.critiques || [],
-                  contrastiveLearning: grade.contrastive_learning || [],
-                  retraining: grade.retraining || { exercises: [], materials: [] },
-                  polishedEssay: grade.polished_essay || '',
-                } as EssayGradeResult,
-              } as EssayHistoryData,
-            }));
-            setCloudHistoryItems([...processHistory, ...gradeHistory]);
-            const data = tpRes.data;
+          setCloudHistoryError('');
+          getStudentDetail(userId).then((cloudData) => {
+            const data = cloudData.thinkingProcesses || [];
             if (data) {
               setUnscoredArguments(data.filter((p: any) => p.status === 'sent_to_grader'
                 && isArgumentativeProcess(p) === true
@@ -1050,50 +985,115 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
               setUnscoredArguments([]);
               setPartialArguments([]);
             }
-            const rows = essayRes.data || [];
+            const rows = cloudData.essays || [];
             const sorted = [...rows]
               .filter((e: any) => typeof e?.total_score === 'number')
               .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
             setRemoteEssayScores(
               sorted.map((e: any) => ({ created_at: e.created_at, total_score: e.total_score }))
             );
+            const cloudEssays: HistoryItem[] = rows.map((e: any) => ({
+              id: `cloud-essay-${e.id}`,
+              timestamp: new Date(e.created_at).getTime(),
+              topic: e.topic || '',
+              dataType: 'essay_grade',
+              data: {
+                essay: e.essay || '',
+                writingMode: e.writing_mode === 'narrative' ? 'narrative' : 'argumentative',
+                result: {
+                  totalScore: Number(e.total_score) || 0,
+                  subScores: {
+                    content: Number(e.content_score) || 0,
+                    organization: Number(e.organization_score) || 0,
+                    proficiency: Number(e.proficiency_score) || 0,
+                    clarity: Number(e.clarity_score) || 0,
+                  },
+                  generalComment: e.general_comment || '',
+                  issueOverview: { critical: [], general: [], minor: [] },
+                  critiques: Array.isArray(e.critiques) ? e.critiques : [],
+                  contrastiveLearning: Array.isArray(e.contrastive_learning) ? e.contrastive_learning : [],
+                  retraining: e.retraining || { exercises: [], materials: [] },
+                  polishedEssay: e.polished_essay || '',
+                },
+              },
+            }));
+            const cloudScaffolds: HistoryItem[] = (cloudData.scaffolds || []).map((s: any) => ({
+              id: `cloud-scaffold-${s.id}`,
+              timestamp: new Date(s.created_at).getTime(),
+              topic: s.topic || '',
+              dataType: 'scaffold',
+              data: {
+                selectedDimension: s.selected_dimension || '',
+                userIdea: s.user_idea || '',
+                vocabulary: Array.isArray(s.vocabulary) ? s.vocabulary : [],
+                collocations: Array.isArray(s.collocations) ? s.collocations : [],
+                frames: Array.isArray(s.frames) ? s.frames : [],
+                writingMode: s.writing_mode === 'narrative' ? 'narrative' : 'argumentative',
+              },
+            }));
+            const cloudDrills: HistoryItem[] = (cloudData.drills || []).map((d: any) => ({
+              id: `cloud-drill-${d.id}`,
+              timestamp: new Date(d.created_at).getTime(),
+              topic: d.topic || 'Sentence Drill',
+              dataType: 'drill',
+              data: {
+                mode: d.mode,
+                score: Number(d.score) || 0,
+                totalQuestions: Number(d.total_questions) || 0,
+              },
+            }));
+            const cloudProcesses: HistoryItem[] = data.map((p: any) => ({
+              id: `cloud-process-${p.id}`,
+              timestamp: new Date(p.created_at).getTime(),
+              topic: p.topic || '',
+              dataType: 'inspiration',
+              data: {
+                cards: Array.isArray(p.inspiration_cards) ? p.inspiration_cards : [],
+                userInputs: p.user_ideas || {},
+                writingMode: p.writing_mode === 'narrative' ? 'narrative' : 'argumentative',
+                dimensionDrafts: p.dimension_drafts || {},
+                validationResults: p.validation_results || {},
+                personalizedExpansions: p.personalized_expansions || {},
+                assembledEssay: p.assembled_essay || null,
+                argumentReflection: p.argument_reflection || null,
+                cloudProcessId: p.id,
+                cloudStatus: p.status,
+              } as InspirationHistoryData,
+            }));
+            setCloudHistoryItems([...cloudEssays, ...cloudScaffolds, ...cloudDrills, ...cloudProcesses]);
+            if (cloudData.error) setCloudHistoryError('部分云端学习记录暂时读取失败，当前仅显示已成功读取的记录。');
+            else setCloudHistoryError('');
           }).catch(() => {
             setCloudHistoryItems([]);
+            setCloudHistoryError('云端学习记录暂时读取失败，请检查网络后刷新页面。');
             setCtrlHistory([]);
             setUnscoredArguments([]);
             setPartialArguments([]);
             setRemoteEssayScores([]);
-          });
-        } else {
-          setCloudHistoryItems([]);
-          setRemoteEssayScores([]);
-        }
+          }).finally(() => setLoading(false));
       } else {
         setCloudHistoryItems([]);
+        setCloudHistoryError('当前登录状态未关联云端学生身份，个人档案不会回退读取本机历史。请退出后重新登录。');
         setRemoteEssayScores([]);
+        setCtrlHistory([]);
+        setUnscoredArguments([]);
+        setPartialArguments([]);
+        setLoading(false);
       }
     } catch {
       setCloudHistoryItems([]);
+      setCloudHistoryError('云端学习记录初始化失败，请刷新页面后重试。');
       setRemoteEssayScores([]);
+      setCtrlHistory([]);
+      setUnscoredArguments([]);
+      setPartialArguments([]);
+      setLoading(false);
     }
-  }, [isActive, refreshData]);
-
-  useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === getHistoryStorageKey()) refreshData();
-    };
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, [refreshData]);
+  }, [isActive, userId]);
 
   // Helper Functions
   const handleItemClick = (item: HistoryItem) => {
     if (item.dataType === 'scaffold' || item.dataType === 'essay_grade') setViewingItem(item);
-  };
-
-  const handleExportEssay = (event: React.MouseEvent, item: HistoryItem) => {
-    event.stopPropagation();
-    if (item.dataType === 'essay_grade') downloadFinalEssayRecord(item);
   };
 
   const toggleExplanation = (id: number) => {
@@ -1128,7 +1128,6 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
   const getBadgeConfig = (type: string) => {
     switch (type) {
       case 'scaffold': return { label: '审辨写作训练', style: 'bg-brand-50 text-brand-700 border-brand-200' };
-      case 'inspiration': return { label: '审辨写作过程', style: 'bg-brand-50 text-brand-700 border-brand-200' };
       case 'essay_grade': return { label: '✍️ 作文批改', style: 'bg-indigo-50 text-indigo-700 border-indigo-200' };
       case 'drill': return { label: '🏋️ 句子特训', style: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
       default: return { label: '📝 记录', style: 'bg-slate-50 text-slate-600 border-slate-200' };
@@ -1198,7 +1197,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
               <h3 className="font-bold text-slate-800 text-sm">学习里程碑</h3>
             </div>
             <p className="text-xs text-slate-500 mb-3 leading-relaxed">
-              达成条件后自动点亮；悬停可查看说明。数据来自本机学习记录与（若已登录）云端作文与审辨信度。
+              达成条件后自动点亮；悬停可查看说明。登录后按当前账号的云端记录统计；旧本机记录不会混入个人档案。
             </p>
             <div className="flex flex-wrap gap-2">
               {milestoneStates.map((m) => (
@@ -1731,6 +1730,7 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
           {/* 4. History List */}
           <div className="mb-12">
             <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2"><span className="bg-blue-100 text-blue-900 w-8 h-8 rounded-lg flex items-center justify-center text-base">🗂️</span>学习活动档案 (Activity Log)</h3>
+            {cloudHistoryError && <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">{cloudHistoryError}</div>}
             {activityHistory.length === 0 ? <div className="text-center py-10 bg-slate-50 rounded-2xl border border-slate-100 border-dashed"><p className="text-slate-400">暂无历史记录</p></div> : (
               <>
                 <div className="space-y-4">
@@ -1754,8 +1754,6 @@ const ProfileCenter: React.FC<ProfileCenterProps> = ({ isActive, onNavigate }) =
                                 <div className="text-xl font-bold text-blue-900 leading-none">{(item.data as any).result.totalScore}<span className="text-[10px] text-slate-400 font-normal ml-0.5">/15</span></div>
                               </div>
                             )}
-                            {item.dataType === 'inspiration' && (item.data as InspirationHistoryData).cloudStatus && <span className="text-xs text-slate-500">{(item.data as InspirationHistoryData).cloudStatus === 'sent_to_grader' ? '已送批改' : '进行中'}</span>}
-                            {item.dataType === 'essay_grade' && <button onClick={(event) => handleExportEssay(event, item)} className="text-xs font-bold text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded-lg px-2.5 py-1.5 whitespace-nowrap">导出作文</button>}
                             {isClickable && <span className="text-slate-300 group-hover:text-blue-900 transition-colors text-xl">→</span>}
                           </div>
                         </div>

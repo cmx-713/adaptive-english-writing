@@ -6,7 +6,6 @@ import { getNarrativeFocusLabel } from '../types';
 import UiIcon, { type UiIconName } from './UiIcon';
 import ArgumentativeCtrlV2Panel from './ArgumentativeCtrlV2Panel';
 import type { ArgumentativeCtrlV2 } from '../services/argumentativeCtrlRubric';
-import { downloadProcessEvidence } from '../services/writingEvidenceExport';
 
 interface ThinkingProcessViewProps {
     processes: any[];
@@ -329,9 +328,6 @@ const ThinkingProcessView: React.FC<ThinkingProcessViewProps> = ({ processes, on
                                 </div>
                             </div>
                             <div className="flex items-center gap-2 flex-shrink-0">
-                                <button type="button" onClick={(event) => { event.stopPropagation(); downloadProcessEvidence(proc); }} className="text-[10px] font-bold text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 rounded-lg px-2 py-1 whitespace-nowrap" title="导出该篇完整教学过程证据">
-                                    导出过程
-                                </button>
                                 {/* 阶段进度 */}
                                 <div className="flex gap-0.5">
                                     {['构思', '追问', '支架', '成文'].map((label, i) => (

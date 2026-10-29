@@ -41,7 +41,6 @@ export interface IdeaValidationResult {
   narrativeRole?: NarrativeCardRole;
   initialIdea?: string;
   conversation?: IdeaCoachingTurn[];
-  pendingAnswer?: string;
   revisedIdea?: string;
   isComplete?: boolean;
   progressSummary?: string;

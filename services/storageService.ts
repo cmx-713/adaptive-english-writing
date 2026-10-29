@@ -4,13 +4,14 @@ import { HistoryItem, ScaffoldContent, EssayHistoryData, HistoryDataType, Inspir
 const LEGACY_STORAGE_KEY = "cet_writing_history_v2";
 let activeHistoryUserId: string | null = null;
 
-/** 本机学习历史按 Supabase 用户 ID 隔离；旧共享键保留但不自动归属任何学生。 */
+/** 每个账号使用独立的本机历史键；旧共享键不再展示或自动归属。 */
 export const setHistoryUserScope = (userId: string | null) => {
   activeHistoryUserId = userId?.trim() || null;
 };
 
-export const getHistoryStorageKey = () => activeHistoryUserId ? `${LEGACY_STORAGE_KEY}:${activeHistoryUserId}` : null;
-export const isHistoryUserScope = (userId: string | undefined) => !!userId && activeHistoryUserId === userId;
+export const getHistoryStorageKey = () => activeHistoryUserId
+  ? `${LEGACY_STORAGE_KEY}:${activeHistoryUserId}`
+  : null;
 
 export const saveToHistory = (
   topic: string,

@@ -168,7 +168,6 @@ const App: React.FC = () => {
   const handleLogout = () => {
     localStorage.removeItem('cet_student_user');
     setHistoryUserScope(null);
-    setPrefillGraderData(null);
     setUser(null);
   };
 
@@ -355,7 +354,9 @@ const App: React.FC = () => {
         <div className={activeTab === 'profile' ? 'block' : 'hidden'}>
           <ErrorBoundary fallbackMessage="学习中心加载出错">
             <ProfileCenter
+              key={user?.id || 'anonymous'}
               isActive={activeTab === 'profile'}
+              userId={user?.id}
               onNavigate={(path: string) => navigate(path)}
             />
           </ErrorBoundary>

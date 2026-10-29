@@ -16,7 +16,6 @@ interface ResultsDisplayProps {
   isHistoryView?: boolean;
   initialDraft?: string;          // 从已保存草稿恢复
   onDraftChange?: (draft: string) => void;  // 实时回传草稿内容
-  saveDraftControls?: React.ReactNode;
 }
 
 // Badge Logic Helper
@@ -27,7 +26,7 @@ const getUsageBadge = (count: number) => {
   return { label: '待开始', color: 'bg-slate-100 text-slate-500 border-slate-200', bg: 'bg-slate-50' };
 };
 
-const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ data, topic, writingMode = data.writingMode || 'argumentative', socraticQuestion, thinkingExpansion, onBack, isHistoryView = false, initialDraft = '', onDraftChange, saveDraftControls }) => {
+const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ data, topic, writingMode = data.writingMode || 'argumentative', socraticQuestion, thinkingExpansion, onBack, isHistoryView = false, initialDraft = '', onDraftChange }) => {
   const isNarrative = writingMode === 'narrative';
   // Local state for collocations to support "Load More"
   const [collocations, setCollocations] = useState<CollocationItem[]>(data.collocations);
@@ -83,6 +82,13 @@ const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ data, topic, writingMod
     setUsedCollocationSet(foundCols);
 
   }, [draft, data.vocabulary, collocations]);
+
+  // 实时回传草稿给父组件
+  useEffect(() => {
+    if (onDraftChange) {
+      onDraftChange(draft);
+    }
+  }, [draft]);
 
   const handleLoadMoreCollocations = async () => {
     setIsLoadingMoreCols(true);
@@ -165,7 +171,6 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
     
     const newText = draft.substring(0, start) + text + draft.substring(end);
     setDraft(newText);
-    onDraftChange?.(newText);
     
     // Restore focus and move cursor
     setTimeout(() => {
@@ -430,12 +435,8 @@ ${data.frames.map(f => `[${f.patternName}] ${f.patternNameZh}\nTemplate: ${f.tem
                    ? '写下故事中的一个场景或关键时刻…'
                    : '在此写下你的段落…'}
                  value={draft}
-                 onChange={(e) => {
-                   setDraft(e.target.value);
-                   onDraftChange?.(e.target.value);
-                 }}
+                 onChange={(e) => setDraft(e.target.value)}
                />
-               {saveDraftControls && <div className="mt-3">{saveDraftControls}</div>}
                
                <div className="flex justify-end mt-4">
                  <button 

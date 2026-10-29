@@ -15,7 +15,6 @@ interface PhaseOneCardsProps {
   dimensionDrafts: Record<string, DimensionDraft>;  // 各维度草稿
   onAssembleEssay: () => void;                       // 组合成文回调
   onValidationComplete?: (cardId: string, result: IdeaValidationResult) => void; // 观点验证完成回调
-  onPendingAnswerChange?: (cardId: string, answer: string) => void;
   initialValidationResults?: Record<string, IdeaValidationResult>; // 从未完成草稿恢复导师追问结果
   onAddDimension?: (dimension: string) => void;
   addingDimension?: string | null;
@@ -41,7 +40,6 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
   dimensionDrafts,
   onAssembleEssay,
   onValidationComplete,
-  onPendingAnswerChange,
   initialValidationResults = {},
   onAddDimension,
   addingDimension = null
@@ -80,9 +78,6 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
     setValidationResult(initialValidationResults);
     setRevisedIdeas(Object.fromEntries(
       Object.entries(initialValidationResults).map(([id, result]) => [id, result.revisedIdea || ''])
-    ));
-    setCoachingAnswers(Object.fromEntries(
-      Object.entries(initialValidationResults).map(([id, result]) => [id, result.pendingAnswer || ''])
     ));
     setFeedbackExpanded(Object.fromEntries(
       Object.keys(initialValidationResults).map(id => [id, true])
@@ -165,7 +160,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
     const answeredConversation = conversation.map((turn, index) =>
       index === conversation.length - 1 ? { ...turn, studentResponse: response } : turn
     );
-    const pendingResult = { ...current, pendingAnswer: '', conversation: answeredConversation };
+    const pendingResult = { ...current, conversation: answeredConversation };
     setValidationResult(prev => ({ ...prev, [card.id]: pendingResult }));
     persistCoachingResult(card.id, pendingResult);
     setCoachingErrors(prev => ({ ...prev, [card.id]: '' }));
@@ -628,10 +623,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                         <div className="mb-4 space-y-2">
                           <textarea
                             value={coachingAnswers[card.id] || ''}
-                            onChange={e => {
-                              setCoachingAnswers(prev => ({ ...prev, [card.id]: e.target.value }));
-                              onPendingAnswerChange?.(card.id, e.target.value);
-                            }}
+                            onChange={e => setCoachingAnswers(prev => ({ ...prev, [card.id]: e.target.value }))}
                             disabled={coachingBusy[card.id] || isLoading}
                             rows={3}
                             className="w-full p-3 rounded-lg border border-sky-200 text-sm text-slate-800 outline-none resize-y focus:ring-4 focus:ring-sky-50 focus:border-sky-400 disabled:bg-slate-50"

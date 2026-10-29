@@ -10,8 +10,6 @@ import type { ArgumentativeCtrlV2 } from '../services/argumentativeCtrlRubric';
 import { isArgumentativeProcess } from '../services/argumentativeCtrlRubric';
 import BatchArgumentativeCtrlV2Modal from '../components/BatchArgumentativeCtrlV2Modal';
 import BatchTopicPicker, { type BatchTopicOption } from '../components/BatchTopicPicker';
-import ProcessEvidenceExportModal from '../components/ProcessEvidenceExportModal';
-import EssaySubmissionTab from './teacher/EssaySubmissionTab';
 
 /** 本校固定班顺序 + 数据库已有 class_name（含外校虚拟班等），去重排序 */
 function mergeTeacherClassOptions(predefined: string[], allUsers: any[]): string[] {
@@ -363,7 +361,7 @@ import EssayGalleryTab from './teacher/EssayGalleryTab';
 import UsageTab from './teacher/UsageTab';
 import RosterTab from './teacher/RosterTab';
 
-type TeacherTab = 'overview' | 'analytics' | 'students' | 'submissions' | 'essays' | 'usage' | 'external' | 'roster';
+type TeacherTab = 'overview' | 'analytics' | 'students' | 'essays' | 'usage' | 'external' | 'roster';
 
 interface TeacherDashboardProps {
     user: User;
@@ -392,7 +390,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                     getAllDrillHistory(500),
                     getAllScaffoldHistory(500),
                     getAgentUsageSummary(),
-                    getAllThinkingProcesses(5000),
+                    getAllThinkingProcesses(500),
                     getExternalUsers(),
                     getActiveRosterClassLabels('student'),
                     getActiveRosterClassLabels('external_student'),
@@ -556,7 +554,6 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
     };
 
     const [showExportMenu, setShowExportMenu] = useState(false);
-    const [showProcessEvidenceExport, setShowProcessEvidenceExport] = useState(false);
     const [showBatchCtrl, setShowBatchCtrl] = useState(false);
     const [showBatchArgumentativeCtrl, setShowBatchArgumentativeCtrl] = useState(false);
 
@@ -564,7 +561,6 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
         { key: 'overview', label: '教学概览' },
         { key: 'analytics', label: '学情分析' },
         { key: 'students', label: '学生档案' },
-        { key: 'submissions', label: '提交情况' },
         { key: 'essays', label: '作文详情' },
         { key: 'usage', label: '使用统计' },
         { key: 'roster', label: '受邀名单' },
@@ -690,10 +686,6 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                                             className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 font-medium">
                                             审辨信度汇总
                                         </button>
-                                        <button onClick={() => { setShowProcessEvidenceExport(true); setShowExportMenu(false); }}
-                                            className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 font-medium">
-                                            教学过程证据包
-                                        </button>
                                     </div>
                                 </>
                             )}
@@ -729,9 +721,6 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                 {activeTab === 'essays' && (
                     <EssayGalleryTab essays={filtered.essays} isLoading={isLoading} />
                 )}
-                {activeTab === 'submissions' && !isLoading && (
-                    <EssaySubmissionTab students={students} selectedClass={selectedClass} classOptions={classList} />
-                )}
                 {activeTab === 'usage' && (
                     <UsageTab essays={filtered.essays} drills={filtered.drills} scaffolds={filtered.scaffolds} usageLogs={filtered.usageLogs} isLoading={isLoading} />
                 )}
@@ -755,11 +744,6 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                 onClose={() => setShowBatchArgumentativeCtrl(false)}
                 onSaved={handleThinkingProcessCtrlSaved}
                 classOptions={classList}
-            />}
-            {showProcessEvidenceExport && <ProcessEvidenceExportModal
-                classOptions={classList}
-                initialClass={selectedClass === 'all' ? '' : selectedClass}
-                onClose={() => setShowProcessEvidenceExport(false)}
             />}
 
             {/* Footer */}
