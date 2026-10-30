@@ -29,6 +29,19 @@ const DIMENSION_VAULT = [
   { label: 'Ethics' },
 ];
 
+const normalizeDimensionFamily = (label: string): string => {
+  const normalized = label.trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    tech: 'technology',
+    technological: 'technology',
+    environmental: 'environment',
+    educational: 'education',
+    psychological: 'psychology',
+    ethical: 'ethics',
+  };
+  return aliases[normalized] || normalized;
+};
+
 const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
   topic,
   writingMode = 'argumentative',
@@ -357,7 +370,7 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
   const draftCount = Object.keys(dimensionDrafts).length;
   const progressComplete = draftCount >= completionTarget;
   const availableVaultDimensions = DIMENSION_VAULT.filter(dim =>
-    !cards.some(card => card.dimension.toLowerCase() === dim.label.toLowerCase())
+    !cards.some(card => normalizeDimensionFamily(card.dimension) === normalizeDimensionFamily(dim.label))
   );
 
   return (
@@ -473,6 +486,9 @@ const PhaseOneCards: React.FC<PhaseOneCardsProps> = ({
                   )}
                 </div>
                 <h4 className="text-xl font-bold text-slate-800 leading-tight">{isNarrative ? getNarrativeFocusLabel(card.dimension) : card.dimension}</h4>
+                {!isNarrative && card.hint?.trim() && (
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500 line-clamp-2">{card.hint}</p>
+                )}
                 {dimensionDrafts[card.id] && (
                   <p className="text-xs text-emerald-600 mt-1 line-clamp-2 italic">
                     "{dimensionDrafts[card.id].draft.substring(0, 80)}..."
